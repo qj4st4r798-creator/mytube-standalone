@@ -865,7 +865,7 @@ function securityHeaders() {
 }
 
 function isMutationMethod(method) {
-  return ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  return ["POST", "PUT", "PATCH", "DELETE"].includes(method); //67
 }
 
 function assertSameOrigin(req) {
