@@ -77,14 +77,14 @@ async function bootstrap() {
   });
 }
 
-async function handleApi(req, res, url) {
+
   const parts = url.pathname.split("/").filter(Boolean);
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     sendJson(res, 200, { ok: true });
     return;
   }
-
+async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/login") {
     const body = await readJson(req);
     if (!consumeRateLimit(`login:${clientIp(req)}:${String(body.email || "").trim().toLowerCase()}`, MAX_LOGIN_ATTEMPTS, AUTH_WINDOW_MS)) {
@@ -197,49 +197,50 @@ async function handleApi(req, res, url) {
     }
 
     const videoId = createId("video");
-    run(
-      `INSERT INTO videos (
-        id, title, description, thumbnail_url, video_url, current_frame_url, channel_name, owner_id,
-        category, tags_json, views, duration, is_live, is_music, created_at
-      ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-      [
-        videoId,
-        title,
-        String(fields.description || "").trim(),
-        files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
-        files.video_file ? `/uploads/${files.video_file.fileName}` : "",
-        user.channel_name,
-        user.id,
-        String(fields.category || "general").trim() || "general",
-        JSON.stringify(parseTags(fields.tags)),
-        String(fields.duration || "0:00").trim() || "0:00",
-        isLive ? 1 : 0,
-        toBoolean(fields.is_music) ? 1 : 0,
-        new Date().toISOString(),
-      ],
-      true,
-    );
+run(
+  `INSERT INTO videos (
+    id, title, description, thumbnail_url, video_url, current_frame_url, channel_name, owner_id,
+    category, tags_json, views, duration, is_live, is_music, created_at
+  ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+  [
+    videoId,
+    title,
+    String(fields.description || "").trim(),
+    files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
+    files.video_file ? `/uploads/${files.video_file.fileName}` : "",
+    user.channel_name,
+    user.id,
+    String(fields.category || "general").trim() || "general",
+    JSON.stringify(parseTags(fields.tags)),
+    String(fields.duration || "0:00").trim() || "0:00",
+    isLive ? 1 : 0,
+    toBoolean(fields.is_music) ? 1 : 0,
+    new Date().toISOString(),
+  ],
+  true,
+);
 
-    sendJson(res, 201, { video: getVideoById(videoId) });
-    return;
-  }
+sendJson(res, 201, { video: getVideoById(videoId) });
+return;
+}
 
-  if (parts[1] === "videos" && parts[2]) {
-    const videoId = parts[2];
+if (parts[1] === "videos" && parts[2]) {
+  const videoId = parts[2];
 
-    if (req.method === "DELETE" && parts.length === 3) {
-      const user = requireUser(req, res);
-      if (!user) return;
-      const video = getVideoRow(videoId);
-      if (!video) {
-        sendJson(res, 404, { error: "Video not found." });
-        return;
-      }
-      if (user.role !== "admin" && user.id !== video.owner_id) {
-        sendJson(res, 403, { error: "You cannot delete this video." });
-        return;
-      }
-          // Delete files from uploads
+  if (req.method === "DELETE" && parts.length === 3) {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const video = getVideoRow(videoId);
+    if (!video) {
+      sendJson(res, 404, { error: "Video not found." });
+      return;
+    }
+    if (user.role !== "admin" && user.id !== video.owner_id) {
+      sendJson(res, 403, { error: "You cannot delete this video." });
+      return;
+    }
+
+    // Delete files from uploads
     const thumbPath = path.join(UPLOADS_DIR, path.basename(video.thumbnail_url));
     const videoPath = path.join(UPLOADS_DIR, path.basename(video.video_url));
 
@@ -254,8 +255,45 @@ async function handleApi(req, res, url) {
 
     sendJson(res, 200, { ok: true });
     return;
+  }
 
-    }
+  // ======================================================
+  //  WEBRTC SIGNALING ENDPOINTS
+  // ======================================================
+
+  // Store offer / answer / ICE candidate
+  if (req.method === "POST" && parts[3] === "signal") {
+    const body = await readJson(req);
+
+    run(
+      "INSERT INTO signals (id, video_id, payload, created_at) VALUES (?, ?, ?, ?)",
+      [
+        crypto.randomUUID(),
+        videoId,
+        JSON.stringify(body),
+        new Date().toISOString()
+      ],
+      true
+    );
+
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // Retrieve all signaling messages for this video
+  if (req.method === "GET" && parts[3] === "signal") {
+    const rows = all(
+      "SELECT payload FROM signals WHERE video_id = ? ORDER BY created_at ASC",
+      [videoId]
+    );
+
+    sendJson(res, 200, {
+      signals: rows.map(r => JSON.parse(r.payload))
+    });
+    return;
+  }
+}
+
 
     if (req.method === "POST" && parts[3] === "toggle-like") {
       const user = requireUser(req, res);
@@ -367,7 +405,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/api/admin/reports") {
+ { if (req.method === "GET" && url.pathname === "/api/admin/reports") {
     const user = requireUser(req, res);
     if (!user) return;
     if (user.role !== "admin") {

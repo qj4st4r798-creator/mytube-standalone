@@ -407,15 +407,73 @@ async function createVideo(formData) {
       formData: true,
     });
 
-    if (isLive) {
-      if (runtime.liveFrameTimer) {
-        clearInterval(runtime.liveFrameTimer);
+   if (isLive) {
+  // Stop old timers if any
+  if (runtime.liveFrameTimer) {
+    clearInterval(runtime.liveFrameTimer);
+  }
+
+  state.liveBroadcastId = payload.video.id;
+
+  // --- WEBRTC BROADCASTER SETUP ---
+  const videoId = payload.video.id;
+
+  // Create PeerConnection
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" }
+    ]
+  });
+
+  runtime.peerConnection = pc;
+
+  // Add camera tracks
+  runtime.cameraStream.getTracks().forEach(track => {
+    pc.addTrack(track, runtime.cameraStream);
+  });
+
+  // Send ICE candidates to server
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      api(`/api/videos/${videoId}/signal`, {
+        method: "POST",
+        body: { type: "candidate", candidate: event.candidate }
+      }).catch(() => {});
+    }
+  };
+
+  // Create offer
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Send offer to server
+  await api(`/api/videos/${videoId}/signal`, {
+    method: "POST",
+    body: { type: "offer", offer }
+  });
+
+  // Poll for viewer answers + ICE candidates
+  runtime.liveFrameTimer = setInterval(async () => {
+    try {
+      const { signals } = await api(`/api/videos/${videoId}/signal`);
+
+      for (const s of signals) {
+        if (s.type === "answer") {
+          if (!pc.currentRemoteDescription) {
+            await pc.setRemoteDescription(new RTCSessionDescription(s.answer));
+          }
+        }
+        if (s.type === "candidate") {
+          await pc.addIceCandidate(new RTCIceCandidate(s.candidate));
+        }
       }
-      state.liveBroadcastId = payload.video.id;
-      await pushLiveFrame(payload.video.id);
-      runtime.liveFrameTimer = window.setInterval(() => {
-        pushLiveFrame(payload.video.id).catch(() => {});
-      }, 1500);
+    } catch {}
+  }, 1000);
+
+  state.notice = "Live WebRTC broadcast started.";
+}
+
+{
     }
 
     await refreshAppData();
@@ -597,7 +655,11 @@ async function stopLiveBroadcast() {
   await refreshAppData();
   render();
 }
+// ======================================================
+//  LIVE STREAMING HELPERS (FRAME + WEBRTC VIEWER)
+// ======================================================
 
+// Keep this for compatibility with old live-frame system
 async function pushLiveFrame(videoId) {
   const source = runtime.captureVideo;
   if (!source || !runtime.cameraStream) return;
@@ -607,13 +669,71 @@ async function pushLiveFrame(videoId) {
   canvas.height = source.videoHeight || 720;
   const context = canvas.getContext("2d");
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  const frame = canvas.toDataURL("image/jpeg", 0.72);
+  const frame = canvas.toDataURL("image/webp", 0.6);
 
   await api(`/api/videos/${encodeURIComponent(videoId)}/frame`, {
     method: "POST",
     body: { current_frame_url: frame },
   });
 }
+
+// ======================================================
+//  WEBRTC VIEWER — connects to broadcaster
+// ======================================================
+async function startLiveViewer(videoId) {
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  });
+
+  runtime.viewerPC = pc;
+
+  const videoEl = document.getElementById("live-player");
+
+  // When broadcaster sends video/audio
+  pc.ontrack = (event) => {
+    videoEl.srcObject = event.streams[0];
+  };
+
+  // Send ICE candidates back to server
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      api(`/api/videos/${videoId}/signal`, {
+        method: "POST",
+        body: { type: "candidate", candidate: event.candidate }
+      }).catch(() => {});
+    }
+  };
+
+  // Poll for broadcaster offer + ICE candidates
+  runtime.viewerPoll = setInterval(async () => {
+    try {
+      const { signals } = await api(`/api/videos/${videoId}/signal`);
+
+      for (const s of signals) {
+        // Broadcaster offer
+        if (s.type === "offer" && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(s.offer));
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          await api(`/api/videos/${videoId}/signal`, {
+            method: "POST",
+            body: { type: "answer", answer }
+          });
+        }
+
+        // ICE candidates
+        if (s.type === "candidate") {
+          await pc.addIceCandidate(new RTCIceCandidate(s.candidate));
+        }
+      }
+    } catch (err) {
+      console.error("Viewer poll error:", err);
+    }
+  }, 1000);
+}
+
 
 function render() {
   root.innerHTML = state.user ? renderShell() : renderPublicPage();
@@ -942,15 +1062,17 @@ function renderWatchPage() {
       <div class="grid xl:grid-cols-[minmax(0,1fr)_360px] gap-8">
         <div>
           <div class="aspect-video rounded-3xl overflow-hidden border border-border bg-card">
-            ${
-              video.video_url
-                ? `<video class="w-full h-full object-cover bg-black" src="${escapeAttr(video.video_url)}" controls playsinline preload="metadata"></video>`
-                : video.is_live && video.current_frame_url
-                  ? `<img class="w-full h-full object-cover" src="${escapeAttr(video.current_frame_url)}" alt="${escapeAttr(video.title)}" />`
-                : video.thumbnail_url
-                  ? `<img class="w-full h-full object-cover" src="${escapeAttr(video.thumbnail_url)}" alt="${escapeAttr(video.title)}" />`
-                  : `<div class="w-full h-full flex items-center justify-center bg-secondary">${iconVideo("h-14 w-14 text-muted-foreground")}</div>`
-            }
+  ${
+    video.is_live
+      ? `<video id="live-player" autoplay playsinline class="w-full h-full object-cover bg-black"></video>`
+      : video.video_url
+        ? `<video class="w-full h-full object-cover bg-black" src="${escapeAttr(video.video_url)}" controls playsinline preload="metadata"></video>`
+        : video.thumbnail_url
+          ? `<img class="w-full h-full object-cover" src="${escapeAttr(video.thumbnail_url)}" alt="${escapeAttr(video.title)}" />`
+          : `<div class="w-full h-full flex items-center justify-center bg-secondary">${iconVideo("h-14 w-14 text-muted-foreground")}</div>`
+  }
+</div>
+
           </div>
           <h1 class="mt-5 text-2xl md:text-3xl font-bold">${escapeHtml(video.title)}</h1>
           <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
