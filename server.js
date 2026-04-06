@@ -239,12 +239,22 @@ async function handleApi(req, res, url) {
         sendJson(res, 403, { error: "You cannot delete this video." });
         return;
       }
-      run("DELETE FROM likes WHERE video_id = ?", [videoId]);
-      run("DELETE FROM history WHERE video_id = ?", [videoId]);
-      run("DELETE FROM reports WHERE video_id = ?", [videoId]);
-      run("DELETE FROM videos WHERE id = ?", [videoId], true);
-      sendJson(res, 200, { ok: true });
-      return;
+          // Delete files from uploads
+    const thumbPath = path.join(UPLOADS_DIR, path.basename(video.thumbnail_url));
+    const videoPath = path.join(UPLOADS_DIR, path.basename(video.video_url));
+
+    fs.rm(thumbPath, { force: true }, () => {});
+    fs.rm(videoPath, { force: true }, () => {});
+
+    // Delete DB rows
+    run("DELETE FROM likes WHERE video_id = ?", [videoId]);
+    run("DELETE FROM history WHERE video_id = ?", [videoId]);
+    run("DELETE FROM reports WHERE video_id = ?", [videoId]);
+    run("DELETE FROM videos WHERE id = ?", [videoId], true);
+
+    sendJson(res, 200, { ok: true });
+    return;
+
     }
 
     if (req.method === "POST" && parts[3] === "toggle-like") {
