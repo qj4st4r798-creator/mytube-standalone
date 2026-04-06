@@ -78,12 +78,8 @@ async function bootstrap() {
 }
 
 
-  const parts = url.pathname.split("/").filter(Boolean);
-
-  if (req.method === "GET" && url.pathname === "/api/health") {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
+  
+  
 async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/login") {
     const body = await readJson(req);
