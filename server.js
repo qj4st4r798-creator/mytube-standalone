@@ -399,7 +399,13 @@ async function handleApi(req, res, url) {
       run("DELETE FROM likes WHERE video_id = ?", [videoId]);
       run("DELETE FROM history WHERE video_id = ?", [videoId]);
       run("DELETE FROM reports WHERE video_id = ?", [videoId]);
+      run("DELETE FROM comments WHERE video_id = ?", [videoId]);
+      run("DELETE FROM live_chat_messages WHERE video_id = ?", [videoId]);
+      run("DELETE FROM signals WHERE video_id = ?", [videoId]);
       run("DELETE FROM videos WHERE id = ?", [videoId], true);
+      liveChatStreams.delete(videoId);
+      viewerCounts.delete(videoId);
+      broadcastViewerCount(videoId);
 
       sendJson(res, 200, { ok: true });
       return;
