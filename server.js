@@ -1061,6 +1061,10 @@ function migrateLegacyJsonData() {
   if (fs.existsSync(LEGACY_USERS_FILE)) {
     const users = JSON.parse(fs.readFileSync(LEGACY_USERS_FILE, "utf8"));
     for (const u of users) {
+      const exists = get("SELECT id FROM users WHERE lower(email) = lower(?)", [u.email]);
+      if (exists) {
+        continue;
+      }
       if (!get("SELECT id FROM users WHERE id = ?", [u.id])) {
         run(
           "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?,?,?)",
