@@ -81,6 +81,8 @@ async function bootstrap() {
   initDb();
   ensureDefaultStocks();
   migrateLegacyJsonData();
+  persistLegacyUsers();
+  ensureAdminUsers();
   clearExpiredSessions();
 
   const server = http.createServer(async (req, res) => {
@@ -176,6 +178,8 @@ async function handleApi(req, res, url) {
       [userId, email, fullName, channelName, pass.hash, pass.salt, new Date().toISOString()],
       true
     );
+
+    persistLegacyUsers();
 
     const token = createSession(userId);
     sendJson(res, 201, { user: publicUser(userId) }, [sessionCookie(token)]);
@@ -1023,6 +1027,36 @@ function ensureDefaultStocks() {
   }
 }
 
+function ensureAdminUsers() {
+  const admins = [
+    {
+      email: "sjordan4076@mytube.co",
+      password: "71678",
+      fullName: "Sebastian Jordan",
+      channel: "sjordan4076",
+    },
+    {
+      email: "jjordan4084@mytube.co",
+      password: "71650",
+      fullName: "Jordan Admin",
+      channel: "jjordan4084",
+    },
+  ];
+
+  for (const admin of admins) {
+    const existing = get("SELECT id FROM users WHERE lower(email) = lower(?)", [admin.email]);
+    if (existing) continue;
+    const userId = createId("user");
+    const pass = createPasswordHash(admin.password);
+    run(
+      "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?, 'admin',?,?,?)",
+      [userId, admin.email, admin.fullName, slugFromText(admin.channel), pass.hash, pass.salt, new Date().toISOString()],
+      true
+    );
+  }
+  persistLegacyUsers();
+}
+
 function migrateLegacyJsonData() {
   if (fs.existsSync(LEGACY_USERS_FILE)) {
     const users = JSON.parse(fs.readFileSync(LEGACY_USERS_FILE, "utf8"));
@@ -1044,7 +1078,6 @@ function migrateLegacyJsonData() {
         );
       }
     }
-    fs.rmSync(LEGACY_USERS_FILE, { force: true });
   }
 
   if (fs.existsSync(LEGACY_VIDEOS_FILE)) {
@@ -1080,6 +1113,11 @@ function migrateLegacyJsonData() {
     }
     fs.rmSync(LEGACY_VIDEOS_FILE, { force: true });
   }
+}
+
+function persistLegacyUsers() {
+  const users = all("SELECT id,email,full_name,channel_name,role,password_hash,password_salt,created_at FROM users");
+  fs.writeFileSync(LEGACY_USERS_FILE, JSON.stringify(users, null, 2));
 }
 
 function clearExpiredSessions() {
