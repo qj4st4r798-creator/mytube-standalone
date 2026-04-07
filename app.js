@@ -21,9 +21,13 @@ const state = {
 const runtime = {
   cameraStream: null,
   captureVideo: null,
-  liveFrameTimer: null,
+  peerConnection: null,
+  liveSignalTimer: null,
   pagePollTimer: null,
   stockPollTimer: null,
+  viewerPC: null,
+  viewerPoll: null,
+  viewerVideoId: "",
 };
 
 const routeTable = [
@@ -401,90 +405,86 @@ async function createVideo(formData) {
     if (!isLive && videoFile && videoFile.size) {
       multipart.set("video_file", videoFile);
     }
+
     const payload = await api("/api/videos", {
       method: "POST",
       body: multipart,
       formData: true,
     });
 
-   if (isLive) {
-  // Stop old timers if any
-  if (runtime.liveFrameTimer) {
-    clearInterval(runtime.liveFrameTimer);
-  }
-
-  state.liveBroadcastId = payload.video.id;
-
-  // --- WEBRTC BROADCASTER SETUP ---
-  const videoId = payload.video.id;
-
-  // Create PeerConnection
-  const pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" }
-    ]
-  });
-
-  runtime.peerConnection = pc;
-
-  // Add camera tracks
-  runtime.cameraStream.getTracks().forEach(track => {
-    pc.addTrack(track, runtime.cameraStream);
-  });
-
-  // Send ICE candidates to server
-  pc.onicecandidate = (event) => {
-    if (event.candidate) {
-      api(`/api/videos/${videoId}/signal`, {
-        method: "POST",
-        body: { type: "candidate", candidate: event.candidate }
-      }).catch(() => {});
-    }
-  };
-
-  // Create offer
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-
-  // Send offer to server
-  await api(`/api/videos/${videoId}/signal`, {
-    method: "POST",
-    body: { type: "offer", offer }
-  });
-
-  // Poll for viewer answers + ICE candidates
-  runtime.liveFrameTimer = setInterval(async () => {
-    try {
-      const { signals } = await api(`/api/videos/${videoId}/signal`);
-
-      for (const s of signals) {
-        if (s.type === "answer") {
-          if (!pc.currentRemoteDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription(s.answer));
-          }
-        }
-        if (s.type === "candidate") {
-          await pc.addIceCandidate(new RTCIceCandidate(s.candidate));
-        }
+    if (isLive) {
+      try {
+        await startLiveBroadcast(payload.video.id);
+        state.liveBroadcastId = payload.video.id;
+      } catch (error) {
+        cleanupLiveConnection();
+        throw error;
       }
-    } catch {}
-  }, 1000);
-
-  state.notice = "Live WebRTC broadcast started.";
-}
-
-{
     }
 
     await refreshAppData();
     state.notice = isLive ? "Live stream created." : "Video uploaded.";
     setRoute(`/watch/${payload.video.id}`);
-  } catch (error) {
-    state.error = error.message;
-  } finally {
-    state.uploadLoading = false;
-    render();
+    } catch (error) {
+      state.error = error.message;
+    } finally {
+      state.uploadLoading = false;
+      render();
+    }
   }
+
+async function startLiveBroadcast(videoId) {
+  if (!runtime.cameraStream) {
+    throw new Error("Camera stream is not available.");
+  }
+
+  cleanupLiveConnection();
+
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  });
+  runtime.peerConnection = pc;
+
+  runtime.cameraStream.getTracks().forEach((track) => {
+    pc.addTrack(track, runtime.cameraStream);
+  });
+
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      api(`/api/videos/${videoId}/signal`, {
+        method: "POST",
+        body: { type: "candidate", candidate: event.candidate, source: "broadcaster" },
+      }).catch(() => {});
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  await api(`/api/videos/${videoId}/signal`, {
+    method: "POST",
+    body: { type: "offer", offer, source: "broadcaster" },
+  });
+
+  runtime.liveSignalTimer = setInterval(async () => {
+    if (!runtime.peerConnection || runtime.peerConnection !== pc) {
+      cleanupLiveConnection();
+      return;
+    }
+    try {
+      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=broadcaster`);
+      for (const signal of signals) {
+        if (signal.type === "answer" && signal.answer && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+        }
+        if (signal.type === "candidate" && signal.candidate) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        }
+      }
+    } catch (error) {
+      console.error("Broadcast signal poll error:", error);
+    }
+  }, 1000);
 }
 
 async function toggleLike(videoId) {
@@ -608,6 +608,17 @@ function syncBackgroundEffects() {
   }
 }
 
+function cleanupLiveConnection() {
+  if (runtime.liveSignalTimer) {
+    clearInterval(runtime.liveSignalTimer);
+    runtime.liveSignalTimer = null;
+  }
+  if (runtime.peerConnection) {
+    runtime.peerConnection.close();
+    runtime.peerConnection = null;
+  }
+}
+
 async function refreshStocks() {
   try {
     const payload = await api("/api/stocks");
@@ -625,10 +636,7 @@ async function refreshStocks() {
 }
 
 async function stopLiveBroadcast() {
-  if (runtime.liveFrameTimer) {
-    clearInterval(runtime.liveFrameTimer);
-    runtime.liveFrameTimer = null;
-  }
+  cleanupLiveConnection();
 
   if (state.liveBroadcastId) {
     try {
@@ -681,57 +689,101 @@ async function pushLiveFrame(videoId) {
 //  WEBRTC VIEWER — connects to broadcaster
 // ======================================================
 async function startLiveViewer(videoId) {
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-  });
-
-  runtime.viewerPC = pc;
+  stopLiveViewer();
 
   const videoEl = document.getElementById("live-player");
+  if (!videoEl) {
+    return;
+  }
 
-  // When broadcaster sends video/audio
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  });
+  runtime.viewerPC = pc;
+  runtime.viewerVideoId = videoId;
+
   pc.ontrack = (event) => {
     videoEl.srcObject = event.streams[0];
   };
 
-  // Send ICE candidates back to server
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       api(`/api/videos/${videoId}/signal`, {
         method: "POST",
-        body: { type: "candidate", candidate: event.candidate }
+        body: { type: "candidate", candidate: event.candidate, source: "viewer" },
       }).catch(() => {});
     }
   };
 
-  // Poll for broadcaster offer + ICE candidates
-  runtime.viewerPoll = setInterval(async () => {
+  let answered = false;
+  const pendingCandidates = [];
+
+  const pollSignals = async () => {
     try {
-      const { signals } = await api(`/api/videos/${videoId}/signal`);
-
-      for (const s of signals) {
-        // Broadcaster offer
-        if (s.type === "offer" && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(new RTCSessionDescription(s.offer));
-
+      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=viewer`);
+      for (const signal of signals) {
+        if (signal.type === "offer" && signal.offer && !pc.currentRemoteDescription && !answered) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-
           await api(`/api/videos/${videoId}/signal`, {
             method: "POST",
-            body: { type: "answer", answer }
+            body: { type: "answer", answer, source: "viewer" },
           });
+          answered = true;
+          for (const candidate of pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          pendingCandidates.length = 0;
         }
-
-        // ICE candidates
-        if (s.type === "candidate") {
-          await pc.addIceCandidate(new RTCIceCandidate(s.candidate));
+        if (signal.type === "candidate" && signal.candidate) {
+          if (pc.currentRemoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          } else {
+            pendingCandidates.push(signal.candidate);
+          }
         }
       }
-    } catch (err) {
-      console.error("Viewer poll error:", err);
+    } catch (error) {
+      console.error("Viewer signal poll error:", error);
     }
-  }, 1000);
+  };
+
+  await pollSignals();
+  runtime.viewerPoll = window.setInterval(pollSignals, 1000);
+}
+
+function stopLiveViewer() {
+  if (runtime.viewerPoll) {
+    clearInterval(runtime.viewerPoll);
+    runtime.viewerPoll = null;
+  }
+  if (runtime.viewerPC) {
+    runtime.viewerPC.close();
+    runtime.viewerPC = null;
+  }
+  runtime.viewerVideoId = "";
+  const videoEl = document.getElementById("live-player");
+  if (videoEl) {
+    videoEl.srcObject = null;
+    videoEl.pause().catch(() => {});
+  }
+}
+
+function syncLiveViewer() {
+  if (!state.user || state.route.name !== "watch") {
+    stopLiveViewer();
+    return;
+  }
+  const video = state.videos.find((entry) => entry.id === state.route.params.id);
+  if (!video || !video.is_live) {
+    stopLiveViewer();
+    return;
+  }
+  if (runtime.viewerVideoId === video.id && runtime.viewerPC) {
+    return;
+  }
+  void startLiveViewer(video.id).catch((error) => console.error("Live viewer failed:", error));
 }
 
 
@@ -739,6 +791,7 @@ function render() {
   root.innerHTML = state.user ? renderShell() : renderPublicPage();
   syncLivePreview();
   syncBackgroundEffects();
+  syncLiveViewer();
 }
 
 function renderPublicPage() {
