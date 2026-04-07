@@ -596,7 +596,7 @@ async function startLiveBroadcast(videoId) {
     pushLiveFrame(videoId).catch((error) => {
       console.error("Live frame push error:", error);
     });
-  }, 180);
+  }, 120);
 
   runtime.liveSignalTimer = setInterval(async () => {
     try {
@@ -641,7 +641,7 @@ async function ensureBroadcastPeer(videoId, peerId) {
   });
   runtime.broadcastPeers[peerId] = pc;
 
-  runtime.cameraStream.getTracks().forEach((track) => {
+  runtime.cameraStream.getAudioTracks().forEach((track) => {
     pc.addTrack(track, runtime.cameraStream);
   });
 
@@ -797,9 +797,9 @@ function syncBackgroundEffects() {
     state.user &&
     state.videos.some((video) => video.id === state.route.params.id && video.is_live);
 
-  if (watchingLiveVideo || state.route.name === "live") {
+  if (state.route.name === "live") {
     if (!runtime.pagePollTimer) {
-      runtime.pagePollTimer = window.setInterval(refreshAppData, 3000);
+      runtime.pagePollTimer = window.setInterval(refreshAppData, 5000);
     }
   } else if (runtime.pagePollTimer) {
     clearInterval(runtime.pagePollTimer);
@@ -972,7 +972,7 @@ async function pushLiveFrame(videoId) {
   canvas.height = source.videoHeight || 720;
   const context = canvas.getContext("2d");
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  const frame = canvas.toDataURL("image/webp", 0.6);
+  const frame = canvas.toDataURL("image/webp", 0.5);
   runtime.liveFrameUploadInFlight = true;
   try {
     state.liveFrameByVideo[videoId] = frame;
@@ -987,20 +987,100 @@ async function pushLiveFrame(videoId) {
 }
 
 async function startLiveViewer(videoId) {
+  stopLiveViewer();
   runtime.viewerVideoId = videoId;
   const video = state.videos.find((entry) => entry.id === videoId);
   if (video && video.current_frame_url) {
     state.liveFrameByVideo[videoId] = video.current_frame_url;
   }
   syncLiveImageElement(videoId);
+
+  runtime.viewerPeerId = cryptoRandomId();
+  const audioEl = document.getElementById("live-audio");
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  });
+  runtime.viewerPC = pc;
+
+  pc.ontrack = (event) => {
+    if (!audioEl) return;
+    audioEl.srcObject = event.streams[0];
+    audioEl.play().catch(() => {});
+  };
+
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      api(`/api/videos/${videoId}/signal`, {
+        method: "POST",
+        body: { type: "candidate", candidate: event.candidate, source: "viewer", peer_id: runtime.viewerPeerId },
+      }).catch(() => {});
+    }
+  };
+
+  await api(`/api/videos/${videoId}/signal`, {
+    method: "POST",
+    body: { type: "viewer-ready", source: "viewer", peer_id: runtime.viewerPeerId },
+  });
+
+  const pendingCandidates = [];
+  const pollSignals = async () => {
+    try {
+      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=viewer&peer_id=${encodeURIComponent(runtime.viewerPeerId)}`);
+      for (const signal of signals) {
+        if (signal.type === "offer" && signal.offer && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await api(`/api/videos/${videoId}/signal`, {
+            method: "POST",
+            body: { type: "answer", answer, source: "viewer", peer_id: runtime.viewerPeerId },
+          });
+          for (const candidate of pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          pendingCandidates.length = 0;
+        }
+        if (signal.type === "candidate" && signal.candidate) {
+          if (pc.currentRemoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          } else {
+            pendingCandidates.push(signal.candidate);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Viewer audio signal poll error:", error);
+    }
+  };
+
+  await pollSignals();
+  runtime.viewerPoll = window.setInterval(pollSignals, 1000);
 }
 
 function stopLiveViewer() {
+  const videoId = runtime.viewerVideoId;
+  const peerId = runtime.viewerPeerId;
   if (runtime.viewerPoll) {
     clearInterval(runtime.viewerPoll);
     runtime.viewerPoll = null;
   }
+  if (runtime.viewerPC) {
+    runtime.viewerPC.close();
+    runtime.viewerPC = null;
+  }
   runtime.viewerVideoId = "";
+  runtime.viewerPeerId = "";
+  const audioEl = document.getElementById("live-audio");
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.srcObject = null;
+  }
+  if (videoId && peerId && state.user) {
+    api(`/api/videos/${encodeURIComponent(videoId)}/signal`, {
+      method: "POST",
+      body: { type: "viewer-left", source: "viewer", peer_id: peerId },
+    }).catch(() => {});
+  }
 }
 
 function syncLiveViewer() {
@@ -1013,7 +1093,7 @@ function syncLiveViewer() {
     stopLiveViewer();
     return;
   }
-  if (runtime.viewerVideoId === video.id) {
+  if (runtime.viewerVideoId === video.id && runtime.viewerPC) {
     syncLiveImageElement(video.id);
     return;
   }
@@ -1027,6 +1107,13 @@ function syncLiveImageElement(videoId) {
   if (imageEl.tagName === "IMG" && imageEl.getAttribute("src") !== frame) {
     imageEl.setAttribute("src", frame);
   }
+}
+
+function cryptoRandomId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `peer_${Math.random().toString(16).slice(2)}_${Date.now()}`;
 }
 
 
@@ -1393,7 +1480,10 @@ function renderWatchPage() {
     video.is_live
       ? (
         liveFrame
-          ? `<img id="live-player" class="w-full h-full object-cover bg-black" src="${escapeAttr(liveFrame)}" alt="${escapeAttr(video.title)}" />`
+          ? `<div class="relative h-full w-full bg-black">
+              <img id="live-player" class="h-full w-full object-cover bg-black" src="${escapeAttr(liveFrame)}" alt="${escapeAttr(video.title)}" />
+              <audio id="live-audio" autoplay playsinline class="hidden"></audio>
+            </div>`
           : `<div class="w-full h-full flex items-center justify-center bg-black text-muted-foreground">Waiting for live camera...</div>`
       )
       : video.video_url
