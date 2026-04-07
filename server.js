@@ -56,6 +56,7 @@ const authLimiter = new Map();
 const liveChatStreams = new Map();
 const viewerCounts = new Map();
 const MAX_CHAT_STREAM_HISTORY = 200;
+let sessionColumnsCache = null;
 function ensureDirectories() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -754,12 +755,15 @@ function getSession(req) {
   const token = cookies[SESSION_COOKIE];
   if (!token) return null;
 
-  const session = get("SELECT * FROM sessions WHERE id = ?", [token]);
+  const sessionConfig = getSessionConfig();
+  const lookupField = sessionConfig.hasTokenHash ? "token_hash" : "id";
+  const lookupValue = sessionConfig.hasTokenHash ? hashSessionToken(token) : token;
+  const session = get(`SELECT * FROM sessions WHERE ${lookupField} = ?`, [lookupValue]);
   if (!session) return null;
 
-  const expires = new Date(session.expires_at).getTime();
+  const expires = sessionExpiresAt(session.expires_at);
   if (Date.now() > expires) {
-    run("DELETE FROM sessions WHERE id = ?", [token], true);
+    run("DELETE FROM sessions WHERE id = ?", [session.id], true);
     return null;
   }
 
@@ -767,14 +771,28 @@ function getSession(req) {
 }
 
 function createSession(userId) {
-  const id = crypto.randomUUID();
-  const expires = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-  run(
-    "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
-    [id, userId, expires],
-    true
-  );
-  return id;
+  const sessionConfig = getSessionConfig();
+  const token = crypto.randomUUID();
+  const rowId = sessionConfig.hasTokenHash ? createId("session") : token;
+  const expires = sessionConfig.expiresAsInteger
+    ? Date.now() + SESSION_TTL_MS
+    : new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+  if (sessionConfig.hasTokenHash) {
+    run(
+      "INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+      [rowId, userId, hashSessionToken(token), expires, new Date().toISOString()],
+      true
+    );
+  } else {
+    run(
+      "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
+      [rowId, userId, expires],
+      true
+    );
+  }
+
+  return token;
 }
 
 function sessionCookie(token) {
@@ -865,6 +883,29 @@ function consumeRateLimit(key, max, windowMs) {
 
 function clearRateLimit(key) {
   authLimiter.delete(key);
+}
+
+function getSessionConfig() {
+  if (sessionColumnsCache) return sessionColumnsCache;
+  const columns = all("PRAGMA table_info(sessions)");
+  const names = new Set(columns.map((column) => String(column.name || "")));
+  const expiresColumn = columns.find((column) => column.name === "expires_at");
+  sessionColumnsCache = {
+    hasTokenHash: names.has("token_hash"),
+    expiresAsInteger: expiresColumn ? String(expiresColumn.type || "").toUpperCase().includes("INT") : false,
+  };
+  return sessionColumnsCache;
+}
+
+function hashSessionToken(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+function sessionExpiresAt(value) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function toBoolean(v) {
@@ -1160,7 +1201,8 @@ function persistLegacyUsers() {
 }
 
 function clearExpiredSessions() {
-  const now = new Date().toISOString();
+  const sessionConfig = getSessionConfig();
+  const now = sessionConfig.expiresAsInteger ? Date.now() : new Date().toISOString();
   run("DELETE FROM sessions WHERE expires_at < ?", [now], true);
 }
 
