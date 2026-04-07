@@ -1233,7 +1233,16 @@ function renderPage() {
     case "music":
       return renderFeedPage("MyTube Music", "Music uploads from your local platform.", state.videos.filter((video) => video.is_music));
     case "live":
-      return renderFeedPage("MyTube Live", "Current and recent live streams.", state.videos.filter((video) => video.is_live));
+      return renderFeedPage(
+        "MyTube Live",
+        "Current and recent live streams.",
+        state.videos.filter((video) => video.is_live),
+        {
+          createRoute: "/go-live",
+          createLabel: "Go Live",
+          emptyText: "No live streams are running right now. Start your camera broadcast from Go Live.",
+        }
+      );
     case "stock":
       return renderStockPage();
     case "liked":
@@ -1275,6 +1284,10 @@ function syncLiveChatStream() {
 
 function renderFeedPage(title, description, videos, options = {}) {
   const showCreate = options.showCreate !== false;
+  const createRoute = options.createRoute || "/upload";
+  const createLabel = options.createLabel || "Upload";
+  const createIcon = createLabel === "Go Live" ? iconLive("h-4 w-4 mr-2") : iconUpload("h-4 w-4 mr-2");
+  const emptyText = options.emptyText || `${title} is empty right now. Upload a video or create a live stream to populate this page.`;
   return `
     <div>
       <section class="relative overflow-hidden border-b border-border">
@@ -1290,7 +1303,7 @@ function renderFeedPage(title, description, videos, options = {}) {
               <p class="mt-2 text-muted-foreground text-lg max-w-2xl">${escapeHtml(description)}</p>
             </div>
             <div class="flex gap-3">
-              ${showCreate ? `<button class="${primaryButtonClass()}" data-route="/upload">${iconUpload("h-4 w-4 mr-2")}Upload</button>` : ""}
+              ${showCreate ? `<button class="${primaryButtonClass()}" data-route="${escapeAttr(createRoute)}">${createIcon}${escapeHtml(createLabel)}</button>` : ""}
               <button class="${secondaryButtonClass()}" data-action="refresh-data">${iconRefresh("h-4 w-4 mr-2")}Refresh</button>
             </div>
           </div>
@@ -1298,7 +1311,7 @@ function renderFeedPage(title, description, videos, options = {}) {
       </section>
 
       <div class="p-4 md:p-6 max-w-[1800px] mx-auto">
-        ${renderVideoGrid(videos, `${title} is empty right now. Upload a video or create a live stream to populate this page.`)}
+        ${renderVideoGrid(videos, emptyText)}
       </div>
     </div>
   `;
