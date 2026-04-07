@@ -26,13 +26,14 @@ const state = {
 const runtime = {
   cameraStream: null,
   captureVideo: null,
-  peerConnection: null,
+  broadcastPeers: {},
   liveSignalTimer: null,
   pagePollTimer: null,
   stockPollTimer: null,
   viewerPC: null,
   viewerPoll: null,
   viewerVideoId: "",
+  viewerPeerId: "",
   liveChatSource: null,
   liveChatVideoId: "",
   liveViewerPoller: null,
@@ -444,7 +445,7 @@ async function createVideo(formData) {
   render();
 
   try {
-    const isLive = formData.get("is_live") === "on";
+    const isLive = String(formData.get("is_live") || "").toLowerCase() === "true" || formData.get("is_live") === "on";
     const isMusic = formData.get("is_music") === "on";
     if (isLive && !runtime.cameraStream) {
       throw new Error("Enable your camera before starting a live broadcast.");
@@ -588,10 +589,48 @@ async function startLiveBroadcast(videoId) {
 
   cleanupLiveConnection();
 
+  runtime.liveSignalTimer = setInterval(async () => {
+    try {
+      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=broadcaster`);
+      for (const signal of signals) {
+        const peerId = String(signal.peer_id || "").trim();
+        if (!peerId) {
+          continue;
+        }
+        if (signal.type === "viewer-ready") {
+          await ensureBroadcastPeer(videoId, peerId);
+          continue;
+        }
+        if (signal.type === "viewer-left") {
+          removeBroadcastPeer(peerId);
+          continue;
+        }
+        const peer = runtime.broadcastPeers[peerId];
+        if (!peer) {
+          continue;
+        }
+        if (signal.type === "answer" && signal.answer && !peer.currentRemoteDescription) {
+          await peer.setRemoteDescription(new RTCSessionDescription(signal.answer));
+        }
+        if (signal.type === "candidate" && signal.candidate) {
+          await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        }
+      }
+    } catch (error) {
+      console.error("Broadcast signal poll error:", error);
+    }
+  }, 1000);
+}
+
+async function ensureBroadcastPeer(videoId, peerId) {
+  if (runtime.broadcastPeers[peerId]) {
+    return runtime.broadcastPeers[peerId];
+  }
+
   const pc = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   });
-  runtime.peerConnection = pc;
+  runtime.broadcastPeers[peerId] = pc;
 
   runtime.cameraStream.getTracks().forEach((track) => {
     pc.addTrack(track, runtime.cameraStream);
@@ -601,38 +640,32 @@ async function startLiveBroadcast(videoId) {
     if (event.candidate) {
       api(`/api/videos/${videoId}/signal`, {
         method: "POST",
-        body: { type: "candidate", candidate: event.candidate, source: "broadcaster" },
+        body: { type: "candidate", candidate: event.candidate, source: "broadcaster", peer_id: peerId },
       }).catch(() => {});
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+      removeBroadcastPeer(peerId);
     }
   };
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-
   await api(`/api/videos/${videoId}/signal`, {
     method: "POST",
-    body: { type: "offer", offer, source: "broadcaster" },
+    body: { type: "offer", offer, source: "broadcaster", peer_id: peerId },
   });
 
-  runtime.liveSignalTimer = setInterval(async () => {
-    if (!runtime.peerConnection || runtime.peerConnection !== pc) {
-      cleanupLiveConnection();
-      return;
-    }
-    try {
-      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=broadcaster`);
-      for (const signal of signals) {
-        if (signal.type === "answer" && signal.answer && !pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
-        }
-        if (signal.type === "candidate" && signal.candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-        }
-      }
-    } catch (error) {
-      console.error("Broadcast signal poll error:", error);
-    }
-  }, 1000);
+  return pc;
+}
+
+function removeBroadcastPeer(peerId) {
+  const peer = runtime.broadcastPeers[peerId];
+  if (!peer) return;
+  peer.close();
+  delete runtime.broadcastPeers[peerId];
 }
 
 async function toggleLike(videoId) {
@@ -783,9 +816,8 @@ function cleanupLiveConnection() {
     clearInterval(runtime.liveSignalTimer);
     runtime.liveSignalTimer = null;
   }
-  if (runtime.peerConnection) {
-    runtime.peerConnection.close();
-    runtime.peerConnection = null;
+  for (const peerId of Object.keys(runtime.broadcastPeers)) {
+    removeBroadcastPeer(peerId);
   }
 }
 
@@ -936,6 +968,7 @@ async function startLiveViewer(videoId) {
   });
   runtime.viewerPC = pc;
   runtime.viewerVideoId = videoId;
+  runtime.viewerPeerId = cryptoRandomId();
 
   pc.ontrack = (event) => {
     videoEl.srcObject = event.streams[0];
@@ -945,17 +978,22 @@ async function startLiveViewer(videoId) {
     if (event.candidate) {
       api(`/api/videos/${videoId}/signal`, {
         method: "POST",
-        body: { type: "candidate", candidate: event.candidate, source: "viewer" },
+        body: { type: "candidate", candidate: event.candidate, source: "viewer", peer_id: runtime.viewerPeerId },
       }).catch(() => {});
     }
   };
+
+  await api(`/api/videos/${videoId}/signal`, {
+    method: "POST",
+    body: { type: "viewer-ready", source: "viewer", peer_id: runtime.viewerPeerId },
+  });
 
   let answered = false;
   const pendingCandidates = [];
 
   const pollSignals = async () => {
     try {
-      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=viewer`);
+      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=viewer&peer_id=${encodeURIComponent(runtime.viewerPeerId)}`);
       for (const signal of signals) {
         if (signal.type === "offer" && signal.offer && !pc.currentRemoteDescription && !answered) {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
@@ -963,7 +1001,7 @@ async function startLiveViewer(videoId) {
           await pc.setLocalDescription(answer);
           await api(`/api/videos/${videoId}/signal`, {
             method: "POST",
-            body: { type: "answer", answer, source: "viewer" },
+            body: { type: "answer", answer, source: "viewer", peer_id: runtime.viewerPeerId },
           });
           answered = true;
           for (const candidate of pendingCandidates) {
@@ -989,6 +1027,8 @@ async function startLiveViewer(videoId) {
 }
 
 function stopLiveViewer() {
+  const videoId = runtime.viewerVideoId;
+  const peerId = runtime.viewerPeerId;
   if (runtime.viewerPoll) {
     clearInterval(runtime.viewerPoll);
     runtime.viewerPoll = null;
@@ -998,10 +1038,17 @@ function stopLiveViewer() {
     runtime.viewerPC = null;
   }
   runtime.viewerVideoId = "";
+  runtime.viewerPeerId = "";
   const videoEl = document.getElementById("live-player");
   if (videoEl) {
     videoEl.srcObject = null;
     videoEl.pause().catch(() => {});
+  }
+  if (videoId && peerId && state.user) {
+    api(`/api/videos/${encodeURIComponent(videoId)}/signal`, {
+      method: "POST",
+      body: { type: "viewer-left", source: "viewer", peer_id: peerId },
+    }).catch(() => {});
   }
 }
 
@@ -1019,6 +1066,13 @@ function syncLiveViewer() {
     return;
   }
   void startLiveViewer(video.id).catch((error) => console.error("Live viewer failed:", error));
+}
+
+function cryptoRandomId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `peer_${Math.random().toString(16).slice(2)}_${Date.now()}`;
 }
 
 
@@ -1458,6 +1512,7 @@ function renderUploadPage(isLive) {
           </div>
 
           <form data-upload-form class="space-y-5 rounded-3xl border border-border bg-card p-6">
+            <input type="hidden" name="is_live" value="true" />
             <div>
               <label class="text-sm font-medium">Stream Title</label>
               <input class="${inputClass()}" name="title" placeholder="What are you streaming today?" required />
@@ -1486,13 +1541,9 @@ function renderUploadPage(isLive) {
             </div>
             <div>
               <label class="text-sm font-medium">Duration</label>
-              <input class="${inputClass()}" name="duration" value="LIVE" />
+              <input class="${inputClass()}" name="duration" value="LIVE" readonly />
             </div>
             <div class="flex flex-wrap gap-5">
-              <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <input type="checkbox" name="is_live" checked />
-                Live stream
-              </label>
               <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
                 <input type="checkbox" name="is_music" />
                 Music content
@@ -1557,18 +1608,18 @@ function renderUploadPage(isLive) {
         </div>
         <div class="flex flex-wrap gap-5">
           <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
-            <input type="checkbox" name="is_music" ${isLive ? "" : ""} />
+            <input type="checkbox" name="is_music" />
             Music content
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
-            <input type="checkbox" name="is_live" ${isLive ? "checked" : ""} />
-            Live stream
           </label>
         </div>
         ${renderMessage()}
         <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
-          ${state.uploadLoading ? "Saving..." : isLive ? "Create Live Stream" : "Upload Video"}
+          ${state.uploadLoading ? "Saving..." : "Upload Video"}
         </button>
+        <div class="rounded-2xl border border-border bg-background/60 p-4 text-sm text-muted-foreground">
+          Want to stream your camera live instead?
+          <button class="ml-1 text-primary hover:underline" type="button" data-route="/go-live">Open Go Live</button>
+        </div>
       </form>
     </div>
   `;
