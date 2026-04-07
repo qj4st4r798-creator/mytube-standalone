@@ -663,6 +663,14 @@ async function reportVideo(videoId, reason) {
 async function deleteVideo(videoId) {
   try {
     await api(`/api/videos/${encodeURIComponent(videoId)}`, { method: "DELETE" });
+    if (state.liveBroadcastId === videoId) {
+      cleanupLiveConnection();
+      state.liveBroadcastId = "";
+      state.liveCameraEnabled = false;
+    }
+    delete state.liveChatMessagesByVideo[videoId];
+    delete state.commentsByVideo[videoId];
+    delete state.liveViewerCounts[videoId];
     await refreshAppData();
     state.notice = "Video deleted.";
     if (state.route.name === "watch" && state.route.params.id === videoId) {
@@ -1393,7 +1401,7 @@ function renderWatchPage() {
             ${(state.user.id === video.owner_id && video.is_live)
               ? `<button class="${secondaryButtonClass()}" data-action="stop-live">${iconBroadcast("h-4 w-4 mr-2")} Stop Live</button>`
               : ""}
-            ${(state.user.role === "admin" || state.user.id === video.owner_id)
+            ${(state.user.id === video.owner_id)
               ? `<button class="${secondaryButtonClass()}" data-action="delete-video" data-video-id="${video.id}">${iconTrash("h-4 w-4 mr-2")} Delete</button>`
               : ""}
           </div>
@@ -1769,7 +1777,7 @@ function renderVideoCard(video) {
           <button class="${secondaryButtonClass("text-xs px-3 py-2 h-auto")}" data-action="report-video" data-video-id="${video.id}">
             ${iconFlag("h-3.5 w-3.5 mr-1.5")} Report
           </button>
-          ${(state.user.role === "admin" || state.user.id === video.owner_id)
+          ${(state.user.id === video.owner_id)
             ? `<button class="${secondaryButtonClass("text-xs px-3 py-2 h-auto")}" data-action="delete-video" data-video-id="${video.id}">${iconTrash("h-3.5 w-3.5 mr-1.5")} Delete</button>`
             : ""}
         </div>
