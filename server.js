@@ -81,6 +81,8 @@ async function bootstrap() {
   
   
 async function handleApi(req, res, url) {
+  const parts = url.pathname.split("/").filter(Boolean);
+
   if (req.method === "POST" && url.pathname === "/api/login") {
     const body = await readJson(req);
     if (!consumeRateLimit(`login:${clientIp(req)}:${String(body.email || "").trim().toLowerCase()}`, MAX_LOGIN_ATTEMPTS, AUTH_WINDOW_MS)) {
@@ -397,23 +399,31 @@ if (parts[1] === "videos" && parts[2]) {
     } else {
       run("INSERT INTO subscriptions (user_id, channel_name, created_at) VALUES (?, ?, ?)", [user.id, channelName, new Date().toISOString()], true);
     }
-    sendJson(res, 200, { subscribed: !existing });
+            sendJson(res, 200, { subscribed: !existing });
     return;
-  }
+}  // <-- REQUIRED CLOSING BRACE
 
- { if (req.method === "GET" && url.pathname === "/api/admin/reports") {
+// ADMIN REPORTS
+if (req.method === "GET" && url.pathname === "/api/admin/reports") {
+
     const user = requireUser(req, res);
     if (!user) return;
     if (user.role !== "admin") {
       sendJson(res, 403, { error: "Admin access required." });
       return;
     }
-    sendJson(res, 200, { videos: listVideos().filter((video) => video.report_count > 0).sort((a, b) => b.report_count - a.report_count) });
+    sendJson(res, 200, { 
+        videos: listVideos()
+            .filter((video) => video.report_count > 0)
+            .sort((a, b) => b.report_count - a.report_count)
+    });
     return;
-  }
-
-  sendJson(res, 404, { error: "Not found." });
 }
+
+// 404 fallback
+sendJson(res, 404, { error: "Not found." });
+} // <-- THIS closes handleApi() properly
+
 
 function initDb() {
   db.run(`
@@ -1029,9 +1039,8 @@ async function fetchStockFromStooq(symbol) {
 
 function getJson(url) {
   return new Promise((resolve, reject) => {
-    https
-      .get(url, { headers: { "User-Agent": "MyTube-Standalone/1.0" } }, (response) => {
-        let body = "";
+    https.get(url, { headers: { "User-Agent": "MyTube-Standalone/1.0" } }, (response) => {
+
         response.on("data", (chunk) => {
           body += chunk;
         });
@@ -1050,3 +1059,4 @@ function getJson(url) {
       .on("error", reject);
   });
 }
+
