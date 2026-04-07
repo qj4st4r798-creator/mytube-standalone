@@ -12,35 +12,64 @@ const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
 const MAX_JSON_BYTES = Number(process.env.MAX_REQUEST_BYTES || 1024 * 1024 * 10);
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, "data");
+const ABS_ROOT = path.resolve(ROOT);
 const UPLOADS_DIR = path.join(ROOT, "uploads");
+const ABS_UPLOADS = path.resolve(UPLOADS_DIR);
+const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "mytube.sqlite");
 const LEGACY_USERS_FILE = path.join(DATA_DIR, "users.json");
 const LEGACY_VIDEOS_FILE = path.join(DATA_DIR, "videos.json");
 const SESSION_COOKIE = "mytube_session";
-const STOCK_SYMBOLS = ["AAPL.US", "MSFT.US", "NVDA.US", "TSLA.US", "AMZN.US", "GOOG.US", "META.US", "SPY.US"];
+const STOCK_SYMBOLS = ["AAPL.US","MSFT.US","NVDA.US","TSLA.US","AMZN.US","GOOG.US","META.US","SPY.US"];
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 1024 * 1024 * 512);
-const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-const ALLOWED_VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+const ALLOWED_IMAGE_TYPES = new Set(["image/png","image/jpeg","image/webp","image/gif"]);
+const ALLOWED_VIDEO_TYPES = new Set(["video/mp4","video/webm","video/quicktime"]);
 const AUTH_WINDOW_MS = 1000 * 60 * 15;
 const MAX_LOGIN_ATTEMPTS = 10;
 const MAX_SIGNUP_ATTEMPTS = 5;
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+};
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".ico": "image/x-icon",
+};
 const authLimiter = new Map();
+function ensureDirectories() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
 let db;
 
-bootstrap().catch((error) => {
-  console.error(error);
+bootstrap().catch(err => {
+  console.error(err);
   process.exit(1);
 });
 
 async function bootstrap() {
   ensureDirectories();
   const SQL = await initSqlJs({
-    locateFile: (file) => path.join(path.dirname(require.resolve("sql.js/dist/sql-wasm.js")), file),
+    locateFile: f => path.join(path.dirname(require.resolve("sql.js/dist/sql-wasm.js")), f),
   });
 
-  db = fs.existsSync(DB_FILE) ? new SQL.Database(fs.readFileSync(DB_FILE)) : new SQL.Database();
+  db = fs.existsSync(DB_FILE)
+    ? new SQL.Database(fs.readFileSync(DB_FILE))
+    : new SQL.Database();
+
   initDb();
   migrateLegacyJsonData();
   clearExpiredSessions();
@@ -48,53 +77,48 @@ async function bootstrap() {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
-
-      if (isMutationMethod(req.method)) {
-        assertSameOrigin(req);
-      }
-
+      if (isMutationMethod(req.method)) assertSameOrigin(req);
       if (url.pathname.startsWith("/api/")) {
         await handleApi(req, res, url);
         return;
       }
-
       serveStatic(req, res, url.pathname);
-    } catch (error) {
-      if (error.message === "Request body too large.") {
+    } catch (err) {
+      if (err.message === "Request body too large.") {
         sendJson(res, 413, { error: "Upload is too large." });
         return;
       }
-      if (error.message === "Origin mismatch.") {
+      if (err.message === "Origin mismatch.") {
         sendJson(res, 403, { error: "Cross-site request blocked." });
         return;
       }
-      sendJson(res, 500, { error: "Internal server error", detail: error.message });
+      sendJson(res, 500, { error: "Internal server error", detail: err.message });
     }
   });
 
   server.listen(PORT, () => {
-    console.log(`MyTube standalone server running at http://localhost:${PORT}`);
+    console.log(`Server running at http://localhost:${PORT}`);
   });
 }
-
-
-  
-  
 async function handleApi(req, res, url) {
   const parts = url.pathname.split("/").filter(Boolean);
+  if (req.method === "OPTIONS") {
+    sendOptions(res);
+    return;
+  }
 
   if (req.method === "POST" && url.pathname === "/api/login") {
     const body = await readJson(req);
-    if (!consumeRateLimit(`login:${clientIp(req)}:${String(body.email || "").trim().toLowerCase()}`, MAX_LOGIN_ATTEMPTS, AUTH_WINDOW_MS)) {
-      sendJson(res, 429, { error: "Too many login attempts. Please try again later." });
+    if (!consumeRateLimit(`login:${clientIp(req)}:${String(body.email||"").toLowerCase()}`, MAX_LOGIN_ATTEMPTS, AUTH_WINDOW_MS)) {
+      sendJson(res, 429, { error: "Too many login attempts." });
       return;
     }
-    const user = get("SELECT * FROM users WHERE lower(email)=lower(?)", [String(body.email || "").trim()]);
-    if (!user || !verifyPassword(user, String(body.password || ""))) {
+    const user = get("SELECT * FROM users WHERE lower(email)=lower(?)", [String(body.email||"").trim()]);
+    if (!user || !verifyPassword(user, String(body.password||""))) {
       sendJson(res, 401, { error: "Invalid email or password." });
       return;
     }
-    clearRateLimit(`login:${clientIp(req)}:${String(body.email || "").trim().toLowerCase()}`);
+    clearRateLimit(`login:${clientIp(req)}:${String(body.email||"").toLowerCase()}`);
     const token = createSession(user.id);
     sendJson(res, 200, { user: publicUser(user.id) }, [sessionCookie(token)]);
     return;
@@ -102,9 +126,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/logout") {
     const session = getSession(req);
-    if (session) {
-      run("DELETE FROM sessions WHERE id = ?", [session.id], true);
-    }
+    if (session) run("DELETE FROM sessions WHERE id = ?", [session.id], true);
     sendJson(res, 200, { ok: true }, [clearSessionCookie()]);
     return;
   }
@@ -112,37 +134,38 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/signup") {
     const body = await readJson(req);
     if (!consumeRateLimit(`signup:${clientIp(req)}`, MAX_SIGNUP_ATTEMPTS, AUTH_WINDOW_MS)) {
-      sendJson(res, 429, { error: "Too many signup attempts. Please try again later." });
+      sendJson(res, 429, { error: "Too many signup attempts." });
       return;
     }
-    const email = String(body.email || "").trim().toLowerCase();
-    const password = String(body.password || "");
-    const fullName = String(body.full_name || "").trim();
+    const email = String(body.email||"").trim().toLowerCase();
+    const password = String(body.password||"");
+    const fullName = String(body.full_name||"").trim();
     const channelName = slugFromText(body.channel_name || fullName || email.split("@")[0]);
 
     if (!email || !password || !fullName) {
-      sendJson(res, 400, { error: "Name, email, and password are required." });
+      sendJson(res, 400, { error: "Missing fields." });
       return;
     }
     if (password.length < 8) {
-      sendJson(res, 400, { error: "Password must be at least 8 characters." });
+      sendJson(res, 400, { error: "Password too short." });
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      sendJson(res, 400, { error: "Please enter a valid email address." });
+      sendJson(res, 400, { error: "Invalid email." });
       return;
     }
     if (get("SELECT id FROM users WHERE lower(email)=lower(?)", [email])) {
-      sendJson(res, 409, { error: "An account with that email already exists." });
+      sendJson(res, 409, { error: "Email already exists." });
       return;
     }
 
     const userId = createId("user");
-    const passwordData = createPasswordHash(password);
+    const pass = createPasswordHash(password);
+
     run(
-      "INSERT INTO users (id, email, full_name, channel_name, role, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, 'user', ?, ?, ?)",
-      [userId, email, fullName, channelName, passwordData.hash, passwordData.salt, new Date().toISOString()],
-      true,
+      "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?, 'user',?,?,?)",
+      [userId, email, fullName, channelName, pass.hash, pass.salt, new Date().toISOString()],
+      true
     );
 
     const token = createSession(userId);
@@ -171,11 +194,10 @@ async function handleApi(req, res, url) {
       const stocks = await fetchStocks();
       sendJson(res, 200, { stocks, updated_at: new Date().toISOString() });
     } catch {
-      sendJson(res, 502, { error: "Could not fetch live stock quotes." });
+      sendJson(res, 502, { error: "Stock fetch failed." });
     }
     return;
   }
-
   if (req.method === "POST" && url.pathname === "/api/videos") {
     const user = requireUser(req, res);
     if (!user) return;
@@ -183,11 +205,13 @@ async function handleApi(req, res, url) {
     const { fields, files } = await parseMultipart(req);
     const title = String(fields.title || "").trim();
     const isLive = toBoolean(fields.is_live);
+
     if (!title) {
       removeUploadedFiles(files);
       sendJson(res, 400, { error: "A video title is required." });
       return;
     }
+
     if (!isLive && !files.video_file) {
       removeUploadedFiles(files);
       sendJson(res, 400, { error: "Please upload a video file." });
@@ -195,103 +219,129 @@ async function handleApi(req, res, url) {
     }
 
     const videoId = createId("video");
-run(
-  `INSERT INTO videos (
-    id, title, description, thumbnail_url, video_url, current_frame_url, channel_name, owner_id,
-    category, tags_json, views, duration, is_live, is_music, created_at
-  ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-  [
-    videoId,
-    title,
-    String(fields.description || "").trim(),
-    files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
-    files.video_file ? `/uploads/${files.video_file.fileName}` : "",
-    user.channel_name,
-    user.id,
-    String(fields.category || "general").trim() || "general",
-    JSON.stringify(parseTags(fields.tags)),
-    String(fields.duration || "0:00").trim() || "0:00",
-    isLive ? 1 : 0,
-    toBoolean(fields.is_music) ? 1 : 0,
-    new Date().toISOString(),
-  ],
-  true,
-);
-
-sendJson(res, 201, { video: getVideoById(videoId) });
-return;
-}
-
-if (parts[1] === "videos" && parts[2]) {
-  const videoId = parts[2];
-
-  if (req.method === "DELETE" && parts.length === 3) {
-    const user = requireUser(req, res);
-    if (!user) return;
-    const video = getVideoRow(videoId);
-    if (!video) {
-      sendJson(res, 404, { error: "Video not found." });
-      return;
-    }
-    if (user.role !== "admin" && user.id !== video.owner_id) {
-      sendJson(res, 403, { error: "You cannot delete this video." });
-      return;
-    }
-
-    // Delete files from uploads
-    const thumbPath = path.join(UPLOADS_DIR, path.basename(video.thumbnail_url));
-    const videoPath = path.join(UPLOADS_DIR, path.basename(video.video_url));
-
-    fs.rm(thumbPath, { force: true }, () => {});
-    fs.rm(videoPath, { force: true }, () => {});
-
-    // Delete DB rows
-    run("DELETE FROM likes WHERE video_id = ?", [videoId]);
-    run("DELETE FROM history WHERE video_id = ?", [videoId]);
-    run("DELETE FROM reports WHERE video_id = ?", [videoId]);
-    run("DELETE FROM videos WHERE id = ?", [videoId], true);
-
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  // ======================================================
-  //  WEBRTC SIGNALING ENDPOINTS
-  // ======================================================
-
-  // Store offer / answer / ICE candidate
-  if (req.method === "POST" && parts[3] === "signal") {
-    const body = await readJson(req);
 
     run(
-      "INSERT INTO signals (id, video_id, payload, created_at) VALUES (?, ?, ?, ?)",
+      `INSERT INTO videos (
+        id, title, description, thumbnail_url, video_url, current_frame_url,
+        channel_name, owner_id, category, tags_json, views, duration,
+        is_live, is_music, created_at
+      ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
       [
-        crypto.randomUUID(),
         videoId,
-        JSON.stringify(body),
+        title,
+        String(fields.description || "").trim(),
+        files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
+        files.video_file ? `/uploads/${files.video_file.fileName}` : "",
+        user.channel_name,
+        user.id,
+        String(fields.category || "general").trim() || "general",
+        JSON.stringify(parseTags(fields.tags)),
+        String(fields.duration || "0:00").trim() || "0:00",
+        isLive ? 1 : 0,
+        toBoolean(fields.is_music) ? 1 : 0,
         new Date().toISOString()
       ],
       true
     );
 
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 201, { video: getVideoById(videoId) });
     return;
   }
+  if (parts[1] === "videos" && parts[2]) {
+    const videoId = parts[2];
 
-  // Retrieve all signaling messages for this video
-  if (req.method === "GET" && parts[3] === "signal") {
-    const rows = all(
-      "SELECT payload FROM signals WHERE video_id = ? ORDER BY created_at ASC",
-      [videoId]
-    );
+    if (req.method === "DELETE" && parts.length === 3) {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const video = getVideoRow(videoId);
+      if (!video) {
+        sendJson(res, 404, { error: "Video not found." });
+        return;
+      }
+      if (user.role !== "admin" && user.id !== video.owner_id) {
+        sendJson(res, 403, { error: "You cannot delete this video." });
+        return;
+      }
 
-    sendJson(res, 200, {
-      signals: rows.map(r => JSON.parse(r.payload))
-    });
-    return;
-  }
-}
+      const thumbPath = path.join(UPLOADS_DIR, path.basename(video.thumbnail_url));
+      const videoPath = path.join(UPLOADS_DIR, path.basename(video.video_url));
+      fs.rm(thumbPath, { force: true }, () => {});
+      fs.rm(videoPath, { force: true }, () => {});
 
+      run("DELETE FROM likes WHERE video_id = ?", [videoId]);
+      run("DELETE FROM history WHERE video_id = ?", [videoId]);
+      run("DELETE FROM reports WHERE video_id = ?", [videoId]);
+      run("DELETE FROM videos WHERE id = ?", [videoId], true);
+
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (parts[3] === "signal") {
+      if (req.method === "POST") {
+        const body = await readJson(req);
+        const type = String(body.type || "").trim();
+        const validTypes = new Set(["offer", "answer", "candidate"]);
+        if (!validTypes.has(type)) {
+          sendJson(res, 400, { error: "Invalid signal type." });
+          return;
+        }
+
+        const payload = { type };
+        if (type === "offer") {
+          if (!body.offer) {
+            sendJson(res, 400, { error: "Offer payload is required." });
+            return;
+          }
+          payload.offer = body.offer;
+        } else if (type === "answer") {
+          if (!body.answer) {
+            sendJson(res, 400, { error: "Answer payload is required." });
+            return;
+          }
+          payload.answer = body.answer;
+        } else if (type === "candidate") {
+          if (!body.candidate) {
+            sendJson(res, 400, { error: "Candidate payload is required." });
+            return;
+          }
+          payload.candidate = body.candidate;
+        }
+
+        const source = body.source === "viewer" ? "viewer" : "broadcaster";
+        run(
+          "INSERT INTO signals (id, video_id, payload, created_at, source) VALUES (?, ?, ?, ?, ?)",
+          [crypto.randomUUID(), videoId, JSON.stringify(payload), new Date().toISOString(), source],
+          true
+        );
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (req.method === "GET") {
+        const role = String(url.searchParams.get("for") || "viewer").toLowerCase();
+        const desiredSource = role === "broadcaster" ? "viewer" : "broadcaster";
+        const rows = all(
+          "SELECT id, payload FROM signals WHERE video_id = ? AND source = ? ORDER BY created_at ASC",
+          [videoId, desiredSource]
+        );
+        const signals = [];
+        for (const row of rows) {
+          try {
+            signals.push(JSON.parse(row.payload));
+          } catch {
+            // Skip malformed payloads.
+          }
+        }
+        if (rows.length) {
+          const ids = rows.map((row) => row.id);
+          const placeholders = ids.map(() => "?").join(",");
+          run(`DELETE FROM signals WHERE id IN (${placeholders})`, ids, true);
+        }
+        sendJson(res, 200, { signals });
+        return;
+      }
+    }
 
     if (req.method === "POST" && parts[3] === "toggle-like") {
       const user = requireUser(req, res);
@@ -300,11 +350,18 @@ if (parts[1] === "videos" && parts[2]) {
         sendJson(res, 404, { error: "Video not found." });
         return;
       }
-      const existing = get("SELECT 1 AS ok FROM likes WHERE user_id = ? AND video_id = ?", [user.id, videoId]);
+      const existing = get(
+        "SELECT 1 AS ok FROM likes WHERE user_id = ? AND video_id = ?",
+        [user.id, videoId]
+      );
       if (existing) {
         run("DELETE FROM likes WHERE user_id = ? AND video_id = ?", [user.id, videoId], true);
       } else {
-        run("INSERT INTO likes (user_id, video_id, created_at) VALUES (?, ?, ?)", [user.id, videoId, new Date().toISOString()], true);
+        run(
+          "INSERT INTO likes (user_id, video_id, created_at) VALUES (?, ?, ?)",
+          [user.id, videoId, new Date().toISOString()],
+          true
+        );
       }
       sendJson(res, 200, { liked: !existing });
       return;
@@ -319,7 +376,11 @@ if (parts[1] === "videos" && parts[2]) {
       }
       run("UPDATE videos SET views = views + 1 WHERE id = ?", [videoId]);
       run("DELETE FROM history WHERE user_id = ? AND video_id = ?", [user.id, videoId]);
-      run("INSERT INTO history (user_id, video_id, viewed_at) VALUES (?, ?, ?)", [user.id, videoId, new Date().toISOString()], true);
+      run(
+        "INSERT INTO history (user_id, video_id, viewed_at) VALUES (?, ?, ?)",
+        [user.id, videoId, new Date().toISOString()],
+        true
+      );
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -332,12 +393,22 @@ if (parts[1] === "videos" && parts[2]) {
         return;
       }
       const body = await readJson(req);
-      const existing = get("SELECT 1 AS ok FROM reports WHERE user_id = ? AND video_id = ?", [user.id, videoId]);
+      const existing = get(
+        "SELECT 1 AS ok FROM reports WHERE user_id = ? AND video_id = ?",
+        [user.id, videoId]
+      );
       if (!existing) {
         run(
           "INSERT INTO reports (id, video_id, user_id, email, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-          [createId("report"), videoId, user.id, user.email, String(body.reason || "Inappropriate content").trim(), new Date().toISOString()],
-          true,
+          [
+            createId("report"),
+            videoId,
+            user.id,
+            user.email,
+            String(body.reason || "Inappropriate content").trim(),
+            new Date().toISOString()
+          ],
+          true
         );
       }
       sendJson(res, 200, { ok: true });
@@ -361,7 +432,7 @@ if (parts[1] === "videos" && parts[2]) {
       run(
         "UPDATE videos SET current_frame_url = ?, thumbnail_url = CASE WHEN thumbnail_url = '' THEN ? ELSE thumbnail_url END WHERE id = ?",
         [frame, frame, videoId],
-        true,
+        true
       );
       sendJson(res, 200, { ok: true });
       return;
@@ -380,514 +451,191 @@ if (parts[1] === "videos" && parts[2]) {
         return;
       }
       run("UPDATE videos SET is_live = 0 WHERE id = ?", [videoId], true);
+      run("DELETE FROM signals WHERE video_id = ?", [videoId], true);
       sendJson(res, 200, { ok: true });
       return;
     }
   }
-
   if (parts[1] === "channels" && parts[2] && req.method === "POST" && parts[3] === "subscribe") {
     const user = requireUser(req, res);
     if (!user) return;
+
     const channelName = decodeURIComponent(parts[2]);
     if (channelName === user.channel_name) {
-      sendJson(res, 400, { error: "You cannot subscribe to your own channel." });
+      sendJson(res, 400, { error: "You cannot subscribe to yourself." });
       return;
     }
-    const existing = get("SELECT 1 AS ok FROM subscriptions WHERE user_id = ? AND channel_name = ?", [user.id, channelName]);
+
+    const existing = get(
+      "SELECT 1 FROM subscriptions WHERE user_id = ? AND channel_name = ?",
+      [user.id, channelName]
+    );
+
     if (existing) {
-      run("DELETE FROM subscriptions WHERE user_id = ? AND channel_name = ?", [user.id, channelName], true);
-    } else {
-      run("INSERT INTO subscriptions (user_id, channel_name, created_at) VALUES (?, ?, ?)", [user.id, channelName, new Date().toISOString()], true);
+      run(
+        "DELETE FROM subscriptions WHERE user_id = ? AND channel_name = ?",
+        [user.id, channelName],
+        true
+      );
+      sendJson(res, 200, { subscribed: false });
+      return;
     }
-            sendJson(res, 200, { subscribed: !existing });
+
+    run(
+      "INSERT INTO subscriptions (user_id, channel_name, created_at) VALUES (?, ?, ?)",
+      [user.id, channelName, new Date().toISOString()],
+      true
+    );
+
+    sendJson(res, 200, { subscribed: true });
     return;
-}  // <-- REQUIRED CLOSING BRACE
+  }
 
-// ADMIN REPORTS
-if (req.method === "GET" && url.pathname === "/api/admin/reports") {
-
+  if (req.method === "GET" && url.pathname === "/api/admin/reports") {
     const user = requireUser(req, res);
     if (!user) return;
     if (user.role !== "admin") {
       sendJson(res, 403, { error: "Admin access required." });
       return;
     }
-    sendJson(res, 200, { 
-        videos: listVideos()
-            .filter((video) => video.report_count > 0)
-            .sort((a, b) => b.report_count - a.report_count)
-    });
+
+    const videos = listVideos()
+      .filter(v => v.report_count > 0)
+      .sort((a, b) => b.report_count - a.report_count);
+
+    sendJson(res, 200, { videos });
     return;
+  }
+
+  sendJson(res, 404, { error: "Not found." });
 }
-{
-// 404 fallback
-sendJson(res, 404, { error: "Not found." });
-} // <-- THIS closes handleApi() properly
-
-
-function initDb() {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      full_name TEXT NOT NULL,
-      channel_name TEXT NOT NULL,
-      role TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      password_salt TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS videos (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      thumbnail_url TEXT NOT NULL DEFAULT '',
-      video_url TEXT NOT NULL DEFAULT '',
-      current_frame_url TEXT NOT NULL DEFAULT '',
-      channel_name TEXT NOT NULL,
-      owner_id TEXT NOT NULL,
-      category TEXT NOT NULL,
-      tags_json TEXT NOT NULL DEFAULT '[]',
-      views INTEGER NOT NULL DEFAULT 0,
-      duration TEXT NOT NULL DEFAULT '0:00',
-      is_live INTEGER NOT NULL DEFAULT 0,
-      is_music INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS likes (
-      user_id TEXT NOT NULL,
-      video_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      PRIMARY KEY (user_id, video_id)
-    );
-    CREATE TABLE IF NOT EXISTS history (
-      user_id TEXT NOT NULL,
-      video_id TEXT NOT NULL,
-      viewed_at TEXT NOT NULL,
-      PRIMARY KEY (user_id, video_id)
-    );
-    CREATE TABLE IF NOT EXISTS subscriptions (
-      user_id TEXT NOT NULL,
-      channel_name TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      PRIMARY KEY (user_id, channel_name)
-    );
-    CREATE TABLE IF NOT EXISTS reports (
-      id TEXT PRIMARY KEY,
-      video_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      email TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expires_at INTEGER NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `);
-  persistDb();
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", chunk => {
+      data += chunk;
+      if (data.length > MAX_JSON_BYTES) reject(new Error("Request body too large."));
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(data || "{}"));
+      } catch {
+        reject(new Error("Invalid JSON."));
+      }
+    });
+  });
 }
 
-function migrateLegacyJsonData() {
-  const existing = get("SELECT COUNT(*) AS count FROM users");
-  if (existing && existing.count > 0) return;
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const busboy = Busboy({ headers: req.headers, limits: { fileSize: MAX_UPLOAD_BYTES } });
+    const fields = {};
+    const files = {};
 
-  const users = readJsonFile(LEGACY_USERS_FILE, []);
-  const videos = readJsonFile(LEGACY_VIDEOS_FILE, []);
+    busboy.on("field", (name, val) => {
+      fields[name] = val;
+    });
 
-  for (const user of users) {
-    const passwordData =
-      user.password_hash && user.password_salt
-        ? { hash: user.password_hash, salt: user.password_salt }
-        : createPasswordHash(user.password || crypto.randomBytes(8).toString("hex"));
-    run(
-      "INSERT INTO users (id, email, full_name, channel_name, role, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [
-        user.id || createId("user"),
-        user.email,
-        user.full_name || "User",
-        user.channel_name || slugFromText(user.full_name || user.email),
-        user.role || "user",
-        passwordData.hash,
-        passwordData.salt,
-        user.created_at || new Date().toISOString(),
-      ],
-    );
+    busboy.on("file", (name, file, info) => {
+      const { filename, mimeType } = info;
+      const safeName = crypto.randomUUID() + path.extname(filename);
+      const savePath = path.join(UPLOADS_DIR, safeName);
+
+      const out = fs.createWriteStream(savePath);
+      file.pipe(out);
+
+      files[name] = {
+        fileName: safeName,
+        mimeType
+      };
+    });
+
+    busboy.on("finish", () => resolve({ fields, files }));
+    busboy.on("error", reject);
+
+    req.pipe(busboy);
+  });
+}
+
+function removeUploadedFiles(files) {
+  for (const key in files) {
+    const f = files[key];
+    const p = path.join(UPLOADS_DIR, f.fileName);
+    fs.rm(p, { force: true }, () => {});
   }
-
-  for (const video of videos) {
-    run(
-      `INSERT INTO videos (
-        id, title, description, thumbnail_url, video_url, current_frame_url, channel_name, owner_id,
-        category, tags_json, views, duration, is_live, is_music, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        video.id || createId("video"),
-        video.title || "Untitled video",
-        video.description || "",
-        video.thumbnail_url || "",
-        video.video_url || "",
-        video.current_frame_url || "",
-        video.channel_name || "channel",
-        video.owner_id || (users[0] && users[0].id) || createId("user"),
-        video.category || "general",
-        JSON.stringify(video.tags || []),
-        Number(video.views || 0),
-        video.duration || "0:00",
-        video.is_live ? 1 : 0,
-        video.is_music ? 1 : 0,
-        video.created_at || new Date().toISOString(),
-      ],
-    );
-
-    for (const report of video.reports || []) {
-      run(
-        "INSERT INTO reports (id, video_id, user_id, email, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        [createId("report"), video.id, report.user_id || users[0].id, report.email || "", report.reason || "Reported content", report.created_at || new Date().toISOString()],
-      );
-    }
-  }
-
-  for (const user of users) {
-    for (const likedId of user.liked_video_ids || []) {
-      run("INSERT OR IGNORE INTO likes (user_id, video_id, created_at) VALUES (?, ?, ?)", [user.id, likedId, new Date().toISOString()]);
-    }
-    for (const historyId of user.history_video_ids || []) {
-      run("INSERT OR IGNORE INTO history (user_id, video_id, viewed_at) VALUES (?, ?, ?)", [user.id, historyId, new Date().toISOString()]);
-    }
-    for (const channel of user.subscribed_channels || []) {
-      run("INSERT OR IGNORE INTO subscriptions (user_id, channel_name, created_at) VALUES (?, ?, ?)", [user.id, channel, new Date().toISOString()]);
-    }
-  }
-
-  persistDb();
 }
 
 function requireUser(req, res) {
   const session = getSession(req);
   if (!session) {
-    sendJson(res, 401, { error: "Unauthorized" });
+    sendJson(res, 401, { error: "Not authenticated." });
     return null;
   }
   const user = get("SELECT * FROM users WHERE id = ?", [session.user_id]);
   if (!user) {
-    run("DELETE FROM sessions WHERE id = ?", [session.id], true);
-    sendJson(res, 401, { error: "Unauthorized" });
+    sendJson(res, 401, { error: "Invalid session." });
     return null;
   }
   return user;
 }
 
+function publicUser(userId) {
+  const user = get(
+    "SELECT id,email,full_name,channel_name,role,created_at FROM users WHERE id = ?",
+    [userId]
+  );
+  if (!user) return null;
+
+  const liked = all("SELECT video_id FROM likes WHERE user_id = ?", [userId]).map((row) => row.video_id);
+  const history = all("SELECT video_id FROM history WHERE user_id = ? ORDER BY viewed_at DESC", [userId]).map(
+    (row) => row.video_id
+  );
+  const subscriptions = all("SELECT channel_name FROM subscriptions WHERE user_id = ?", [userId]).map(
+    (row) => row.channel_name
+  );
+
+  return {
+    ...user,
+    liked_video_ids: liked,
+    history_video_ids: history,
+    subscribed_channels: subscriptions,
+  };
+}
+
 function getSession(req) {
   const cookies = cookie.parse(req.headers.cookie || "");
-  const rawToken = cookies[SESSION_COOKIE];
-  if (!rawToken) return null;
-  const session = get("SELECT * FROM sessions WHERE token_hash = ?", [hashToken(rawToken)]);
+  const token = cookies[SESSION_COOKIE];
+  if (!token) return null;
+
+  const session = get("SELECT * FROM sessions WHERE id = ?", [token]);
   if (!session) return null;
-  if (Number(session.expires_at) <= Date.now()) {
-    run("DELETE FROM sessions WHERE id = ?", [session.id], true);
+
+  const expires = new Date(session.expires_at).getTime();
+  if (Date.now() > expires) {
+    run("DELETE FROM sessions WHERE id = ?", [token], true);
     return null;
   }
+
   return session;
 }
 
 function createSession(userId) {
-  const rawToken = crypto.randomBytes(32).toString("hex");
-  run("DELETE FROM sessions WHERE user_id = ?", [userId]);
+  const id = crypto.randomUUID();
+  const expires = new Date(Date.now() + SESSION_TTL_MS).toISOString();
   run(
-    "INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
-    [createId("session"), userId, hashToken(rawToken), Date.now() + SESSION_TTL_MS, new Date().toISOString()],
-    true,
+    "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
+    [id, userId, expires],
+    true
   );
-  return rawToken;
-}
-
-function publicUser(userId) {
-  const user = typeof userId === "string" ? get("SELECT * FROM users WHERE id = ?", [userId]) : userId;
-  return {
-    id: user.id,
-    email: user.email,
-    full_name: user.full_name,
-    channel_name: user.channel_name,
-    role: user.role,
-    liked_video_ids: all("SELECT video_id FROM likes WHERE user_id = ? ORDER BY created_at DESC", [user.id]).map((row) => row.video_id),
-    history_video_ids: all("SELECT video_id FROM history WHERE user_id = ? ORDER BY viewed_at DESC", [user.id]).map((row) => row.video_id),
-    subscribed_channels: all("SELECT channel_name FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC", [user.id]).map((row) => row.channel_name),
-  };
-}
-
-function listVideos() {
-  return all("SELECT * FROM videos ORDER BY created_at DESC").map(enrichVideo);
-}
-
-function getVideoRow(videoId) {
-  return get("SELECT * FROM videos WHERE id = ?", [videoId]);
-}
-
-function getVideoById(videoId) {
-  const video = getVideoRow(videoId);
-  return video ? enrichVideo(video) : null;
-}
-
-function enrichVideo(video) {
-  return {
-    ...video,
-    tags: parseTagsJson(video.tags_json),
-    likes: get("SELECT COUNT(*) AS count FROM likes WHERE video_id = ?", [video.id]).count,
-    report_count: get("SELECT COUNT(*) AS count FROM reports WHERE video_id = ?", [video.id]).count,
-    reports: all("SELECT user_id, email, reason, created_at FROM reports WHERE video_id = ? ORDER BY created_at DESC", [video.id]),
-    is_live: Boolean(Number(video.is_live)),
-    is_music: Boolean(Number(video.is_music)),
-  };
-}
-
-function run(sql, params = [], persist = false) {
-  db.run(sql, params);
-  if (persist) persistDb();
-}
-
-function get(sql, params = []) {
-  const statement = db.prepare(sql, params);
-  if (!statement.step()) {
-    statement.free();
-    return null;
-  }
-  const row = statement.getAsObject();
-  statement.free();
-  return row;
-}
-
-function all(sql, params = []) {
-  const statement = db.prepare(sql, params);
-  const rows = [];
-  while (statement.step()) {
-    rows.push(statement.getAsObject());
-  }
-  statement.free();
-  return rows;
-}
-
-function persistDb() {
-  fs.writeFileSync(DB_FILE, Buffer.from(db.export()));
-}
-
-function serveStatic(req, res, pathname) {
-  const cleanPath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const targetPath = path.resolve(ROOT, cleanPath);
-  if (!isPathInside(ROOT, targetPath)) {
-    sendText(res, 403, "Forbidden");
-    return;
-  }
-  const pathExists = fs.existsSync(targetPath) && !fs.statSync(targetPath).isDirectory();
-  if (!pathExists && (pathname.startsWith("/uploads/") || pathname.startsWith("/assets/") || path.extname(pathname))) {
-    sendText(res, 404, "Not found");
-    return;
-  }
-  const finalPath = pathExists ? targetPath : path.join(ROOT, "index.html");
-  sendFile(res, finalPath, req);
-}
-
-function sendFile(res, filePath, req) {
-  const ext = path.extname(filePath).toLowerCase();
-  const contentType = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".mov": "video/quicktime",
-  }[ext] || "application/octet-stream";
-
-  const stat = fs.statSync(filePath);
-  if ([".mp4", ".webm", ".mov"].includes(ext) && req && req.headers.range) {
-    sendRangeFile(res, filePath, stat, contentType, req.headers.range);
-    return;
-  }
-
-  res.writeHead(200, {
-    ...securityHeaders(),
-    "Content-Type": contentType,
-    "Cache-Control": filePath.includes(`${path.sep}uploads${path.sep}`) ? "private, max-age=31536000, immutable" : "no-cache",
-    "Content-Length": stat.size,
-    "Accept-Ranges": "bytes",
-  });
-  fs.createReadStream(filePath).pipe(res);
-}
-
-function sendRangeFile(res, filePath, stat, contentType, rangeHeader) {
-  const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader || "");
-  if (!match) {
-    res.writeHead(416, { ...securityHeaders(), "Content-Range": `bytes */${stat.size}` });
-    res.end();
-    return;
-  }
-
-  const start = match[1] ? Number(match[1]) : 0;
-  const end = match[2] ? Number(match[2]) : stat.size - 1;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= stat.size || start > end) {
-    res.writeHead(416, { ...securityHeaders(), "Content-Range": `bytes */${stat.size}` });
-    res.end();
-    return;
-  }
-
-  res.writeHead(206, {
-    ...securityHeaders(),
-    "Content-Type": contentType,
-    "Cache-Control": "private, max-age=31536000, immutable",
-    "Accept-Ranges": "bytes",
-    "Content-Length": end - start + 1,
-    "Content-Range": `bytes ${start}-${end}/${stat.size}`,
-  });
-  fs.createReadStream(filePath, { start, end }).pipe(res);
-}
-
-function sendJson(res, statusCode, payload, cookiesToSet = []) {
-  const headers = {
-    ...securityHeaders(),
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-cache",
-  };
-  if (cookiesToSet.length) headers["Set-Cookie"] = cookiesToSet;
-  res.writeHead(statusCode, headers);
-  res.end(JSON.stringify(payload));
-}
-
-function sendText(res, statusCode, text) {
-  res.writeHead(statusCode, { ...securityHeaders(), "Content-Type": "text/plain; charset=utf-8" });
-  res.end(text);
-}
-
-async function readJson(req) {
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of req) {
-    total += chunk.length;
-    if (total > MAX_JSON_BYTES) {
-      throw new Error("Request body too large.");
-    }
-    chunks.push(chunk);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
-}
-
-function parseMultipart(req) {
-  return new Promise((resolve, reject) => {
-    const fields = {};
-    const files = {};
-    const pendingWrites = [];
-    let settled = false;
-    const busboy = Busboy({
-      headers: req.headers,
-      limits: { fileSize: MAX_UPLOAD_BYTES, files: 2, fields: 20 },
-    });
-
-    function fail(error) {
-      if (settled) return;
-      settled = true;
-      Promise.all(
-        Object.values(files).map((entry) =>
-          fs.promises.rm(entry.filePath, { force: true }).catch(() => {}),
-        ),
-      ).finally(() => reject(error));
-    }
-
-    busboy.on("field", (name, value) => {
-      fields[name] = value;
-    });
-    busboy.on("file", (name, file, info) => {
-      const allowedTypes = name === "thumbnail_file" ? ALLOWED_IMAGE_TYPES : name === "video_file" ? ALLOWED_VIDEO_TYPES : null;
-      if (!allowedTypes) {
-        file.resume();
-        return;
-      }
-      if (!allowedTypes.has(info.mimeType)) {
-        file.resume();
-        fail(new Error(`Unsupported ${name === "thumbnail_file" ? "image" : "video"} type.`));
-        return;
-      }
-      const ext = safeExtension(info.mimeType, info.filename);
-      const fileName = `${name}-${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
-      const filePath = path.join(UPLOADS_DIR, fileName);
-      const stream = fs.createWriteStream(filePath);
-      const writeDone = new Promise((resolveWrite, rejectWrite) => {
-        stream.on("finish", resolveWrite);
-        stream.on("error", rejectWrite);
-      });
-      pendingWrites.push(writeDone);
-      file.on("limit", () => {
-        stream.destroy();
-        fail(new Error("Upload is too large."));
-      });
-      file.on("error", fail);
-      stream.on("error", fail);
-      file.pipe(stream);
-      files[name] = { fileName, filePath, mimeType: info.mimeType };
-    });
-    busboy.on("partsLimit", () => fail(new Error("Too many uploaded fields.")));
-    busboy.on("filesLimit", () => fail(new Error("Too many files uploaded.")));
-    busboy.on("fieldsLimit", () => fail(new Error("Too many form fields.")));
-    busboy.on("error", fail);
-    busboy.on("finish", async () => {
-      if (settled) return;
-      try {
-        await Promise.all(pendingWrites);
-        settled = true;
-        resolve({ fields, files });
-      } catch (error) {
-        fail(error);
-      }
-    });
-    req.pipe(busboy);
-  });
-}
-
-function safeExtension(mimeType, originalName) {
-  const byMime = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/webp": "webp",
-    "image/gif": "gif",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "video/quicktime": "mov",
-  };
-  if (byMime[mimeType]) return byMime[mimeType];
-  return path.extname(originalName || "").replace(".", "").toLowerCase() || "bin";
-}
-
-function createPasswordHash(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return { hash, salt };
-}
-
-function verifyPassword(user, password) {
-  const hash = crypto.scryptSync(password, user.password_salt, 64).toString("hex");
-  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(user.password_hash, "hex"));
-}
-
-function hashToken(token) {
-  return crypto.createHash("sha256").update(token).digest("hex");
+  return id;
 }
 
 function sessionCookie(token) {
   return cookie.serialize(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: Math.floor(SESSION_TTL_MS / 1000),
+    maxAge: SESSION_TTL_MS / 1000
   });
 }
 
@@ -895,168 +643,391 @@ function clearSessionCookie() {
   return cookie.serialize(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 0,
+    maxAge: 0
   });
 }
 
-function securityHeaders() {
+function sendJson(res, status, obj, extraHeaders = []) {
   const headers = {
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    "X-Frame-Options": "SAMEORIGIN",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Resource-Policy": "same-origin",
-    "Permissions-Policy": "camera=(self), microphone=(self), geolocation=(), payment=(), usb=()",
-    "Content-Security-Policy":
-      "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https://stooq.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; object-src 'none'",
+    "Content-Type": "application/json",
+    ...CORS_HEADERS,
   };
-  if (process.env.NODE_ENV === "production") {
-    headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+  for (const h of extraHeaders) {
+    const [k, v] = h.split(/:(.+)/);
+    headers[k] = v;
   }
-  return headers;
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(obj));
+}
+
+function sendOptions(res) {
+  res.writeHead(204, CORS_HEADERS);
+  res.end();
 }
 
 function isMutationMethod(method) {
-  return ["POST", "PUT", "PATCH", "DELETE"].includes(method); //67
+  return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
 }
 
 function assertSameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return;
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  const proto = req.headers["x-forwarded-proto"] || "http";
-  const expected = `${proto}://${host}`;
-  if (origin !== expected) throw new Error("Origin mismatch.");
-}
-
-function ensureDirectories() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-
-function isPathInside(rootPath, candidatePath) {
-  const relative = path.relative(rootPath, candidatePath);
-  return candidatePath === rootPath || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function readJsonFile(filePath, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-
-function slugFromText(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || `channel-${crypto.randomBytes(3).toString("hex")}`;
-}
-
-function createId(prefix) {
-  return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
-}
-
-function removeUploadedFiles(files) {
-  for (const entry of Object.values(files || {})) {
-    if (entry && entry.filePath) {
-      fs.rmSync(entry.filePath, { force: true });
-    }
-  }
-}
-
-function clearExpiredSessions() {
-  run("DELETE FROM sessions WHERE expires_at <= ?", [Date.now()], true);
+  const host = `http://${req.headers.host}`;
+  if (origin !== host) throw new Error("Origin mismatch.");
 }
 
 function clientIp(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.socket.remoteAddress || "local";
+  return req.headers["x-forwarded-for"] || req.socket.remoteAddress || "0.0.0.0";
 }
 
-function consumeRateLimit(key, limit, windowMs) {
+function consumeRateLimit(key, max, windowMs) {
   const now = Date.now();
-  const record = authLimiter.get(key);
-  if (!record || record.resetAt <= now) {
-    authLimiter.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
+  const entry = authLimiter.get(key) || { count: 0, reset: now + windowMs };
+  if (now > entry.reset) {
+    entry.count = 0;
+    entry.reset = now + windowMs;
   }
-  if (record.count >= limit) {
-    return false;
-  }
-  record.count += 1;
-  authLimiter.set(key, record);
-  return true;
+  entry.count++;
+  authLimiter.set(key, entry);
+  return entry.count <= max;
 }
 
 function clearRateLimit(key) {
   authLimiter.delete(key);
 }
 
-function parseTags(raw) {
-  return String(raw || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+function toBoolean(v) {
+  return v === "1" || v === "true" || v === true;
+}
+function run(sql, params = [], write = false) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  stmt.step();
+  stmt.free();
+  if (write) saveDb();
 }
 
-function parseTagsJson(raw) {
+function get(sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const row = stmt.step() ? stmt.getAsObject() : null;
+  stmt.free();
+  return row;
+}
+
+function all(sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
+function saveDb() {
+  const data = db.export();
+  fs.writeFileSync(DB_FILE, Buffer.from(data));
+}
+
+function initDb() {
+  run(
+    `CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE,
+      full_name TEXT,
+      channel_name TEXT,
+      role TEXT,
+      password_hash TEXT,
+      password_salt TEXT,
+      created_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      expires_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS videos (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      description TEXT,
+      thumbnail_url TEXT,
+      video_url TEXT,
+      current_frame_url TEXT,
+      channel_name TEXT,
+      owner_id TEXT,
+      category TEXT,
+      tags_json TEXT,
+      views INTEGER,
+      duration TEXT,
+      is_live INTEGER,
+      is_music INTEGER,
+      created_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS likes (
+      user_id TEXT,
+      video_id TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS history (
+      user_id TEXT,
+      video_id TEXT,
+      viewed_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      video_id TEXT,
+      user_id TEXT,
+      email TEXT,
+      reason TEXT,
+      created_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS subscriptions (
+      user_id TEXT,
+      channel_name TEXT,
+      created_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS signals (
+      id TEXT PRIMARY KEY,
+      video_id TEXT,
+      payload TEXT,
+      created_at TEXT,
+      source TEXT
+    )`
+  );
+
+  ensureSignalSourceColumn();
+}
+
+function ensureSignalSourceColumn() {
+  const columns = all("PRAGMA table_info(signals)");
+  if (!columns.some((col) => col.name === "source")) {
+    run("ALTER TABLE signals ADD COLUMN source TEXT");
+  }
+  run("UPDATE signals SET source = 'broadcaster' WHERE source IS NULL", [], true);
+}
+
+function migrateLegacyJsonData() {
+  if (fs.existsSync(LEGACY_USERS_FILE)) {
+    const users = JSON.parse(fs.readFileSync(LEGACY_USERS_FILE, "utf8"));
+    for (const u of users) {
+      if (!get("SELECT id FROM users WHERE id = ?", [u.id])) {
+        run(
+          "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?,?,?)",
+          [
+            u.id,
+            u.email,
+            u.full_name,
+            u.channel_name,
+            u.role || "user",
+            u.password_hash,
+            u.password_salt,
+            u.created_at || new Date().toISOString()
+          ],
+          true
+        );
+      }
+    }
+    fs.rmSync(LEGACY_USERS_FILE, { force: true });
+  }
+
+  if (fs.existsSync(LEGACY_VIDEOS_FILE)) {
+    const videos = JSON.parse(fs.readFileSync(LEGACY_VIDEOS_FILE, "utf8"));
+    for (const v of videos) {
+      if (!get("SELECT id FROM videos WHERE id = ?", [v.id])) {
+        run(
+          `INSERT INTO videos (
+            id,title,description,thumbnail_url,video_url,current_frame_url,
+            channel_name,owner_id,category,tags_json,views,duration,
+            is_live,is_music,created_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            v.id,
+            v.title,
+            v.description,
+            v.thumbnail_url,
+            v.video_url,
+            v.current_frame_url || "",
+            v.channel_name,
+            v.owner_id,
+            v.category || "general",
+            JSON.stringify(v.tags || []),
+            v.views || 0,
+            v.duration || "0:00",
+            v.is_live ? 1 : 0,
+            v.is_music ? 1 : 0,
+            v.created_at || new Date().toISOString()
+          ],
+          true
+        );
+      }
+    }
+    fs.rmSync(LEGACY_VIDEOS_FILE, { force: true });
+  }
+}
+
+function clearExpiredSessions() {
+  const now = new Date().toISOString();
+  run("DELETE FROM sessions WHERE expires_at < ?", [now], true);
+}
+
+function listVideos() {
+  const videos = all("SELECT * FROM videos ORDER BY created_at DESC");
+  const likes = all("SELECT video_id, COUNT(*) AS count FROM likes GROUP BY video_id");
+  const reports = all("SELECT * FROM reports ORDER BY created_at DESC");
+
+  const likesMap = new Map(likes.map((row) => [row.video_id, Number(row.count || 0)]));
+  const reportsMap = new Map();
+  for (const report of reports) {
+    const list = reportsMap.get(report.video_id) || [];
+    list.push(report);
+    reportsMap.set(report.video_id, list);
+  }
+
+  return videos.map((video) => ({
+    ...video,
+    likes: likesMap.get(video.id) || 0,
+    report_count: reportsMap.get(video.id)?.length || 0,
+    reports: reportsMap.get(video.id) || [],
+    tags: parseTagsJson(video.tags_json),
+  }));
+}
+
+function getVideoRow(id) {
+  return get("SELECT * FROM videos WHERE id = ?", [id]);
+}
+
+function getVideoById(id) {
+  const v = getVideoRow(id);
+  if (!v) return null;
+  v.tags = parseTagsJson(v.tags_json);
+  return v;
+}
+
+function slugFromText(text) {
+  return String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function parseTags(str) {
+  if (!str) return [];
+  return String(str)
+    .split(",")
+    .map(t => t.trim())
+    .filter(Boolean);
+}
+
+function parseTagsJson(str) {
   try {
-    return JSON.parse(raw || "[]");
+    return JSON.parse(str || "[]");
   } catch {
     return [];
   }
 }
 
-function toBoolean(value) {
-  return value === true || value === "true" || value === "on" || value === "1";
+function createId(prefix) {
+  return prefix + "_" + crypto.randomUUID();
+}
+
+function createPasswordHash(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 310000, 32, "sha256").toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(user, password) {
+  const hash = crypto.pbkdf2Sync(password, user.password_salt, 310000, 32, "sha256").toString("hex");
+  return hash === user.password_hash;
 }
 
 async function fetchStocks() {
-  const quotes = await Promise.all(STOCK_SYMBOLS.map(fetchStockFromStooq));
-  return quotes.filter(Boolean);
-}
-
-async function fetchStockFromStooq(symbol) {
-  const url = `https://stooq.com/q/l/?s=${encodeURIComponent(symbol.toLowerCase())}&f=sd2t2ohlcvn&e=json`;
-  const payload = await getJson(url);
-  const entry = ((payload || {}).symbols || [])[0];
-  if (!entry) return null;
-  const price = Number(entry.close || 0);
-  const open = Number(entry.open || 0);
-  const change = price - open;
-  const changePercent = open ? (change / open) * 100 : 0;
-  return {
-    symbol: String(entry.symbol || symbol).replace(".US", ""),
-    shortName: entry.name || symbol.replace(".US", ""),
-    price,
-    change,
-    changePercent,
-    marketState: "DELAYED",
-  };
-}
-
-function getJson(url) {
+  const symbols = STOCK_SYMBOLS.join(",");
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}`;
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { "User-Agent": "MyTube-Standalone/1.0" } }, (response) => {
-
-        response.on("data", (chunk) => {
-          body += chunk;
-        });
-        response.on("end", () => {
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(`Request failed with status ${response.statusCode}`));
-            return;
-          }
-          try {
-            resolve(JSON.parse(body));
-          } catch (error) {
-            reject(error);
-          }
-        });
-      })
-      .on("error", reject);
+    https.get(url, res => {
+      let data = "";
+      res.on("data", chunk => (data += chunk));
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          resolve(json.quoteResponse.result || []);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on("error", reject);
   });
 }
 
+function isUnderDirectory(filePath, directory) {
+  const relative = path.relative(directory, filePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function normalizeStaticPath(pathname) {
+  const normalized = path.normalize(pathname).replace(/^(\.\.(\/|\\|$))+/g, "");
+  return normalized.replace(/^\/+/, "");
+}
+
+function serveStatic(req, res, pathname) {
+  let targetPath;
+  if (pathname === "/" || pathname === "") {
+    targetPath = path.join(ROOT, "index.html");
+  } else if (pathname.startsWith("/uploads/")) {
+    const relative = pathname.replace(/^\/uploads\//, "");
+    targetPath = path.join(UPLOADS_DIR, normalizeStaticPath(relative));
+  } else {
+    targetPath = path.join(ROOT, normalizeStaticPath(pathname));
+  }
+
+  const allowedRoot = pathname.startsWith("/uploads/") ? ABS_UPLOADS : ABS_ROOT;
+  const resolved = path.resolve(targetPath);
+  if (!isUnderDirectory(resolved, allowedRoot)) {
+    res.writeHead(403, CORS_HEADERS);
+    res.end("Forbidden");
+    return;
+  }
+
+  fs.stat(resolved, (err, stats) => {
+    if (err || !stats.isFile()) {
+      res.writeHead(404, CORS_HEADERS);
+      res.end("Not found");
+      return;
+    }
+
+    const ext = path.extname(resolved).toLowerCase();
+    const headers = { "Content-Type": MIME_TYPES[ext] || "application/octet-stream", ...CORS_HEADERS };
+    res.writeHead(200, headers);
+    const stream = fs.createReadStream(resolved);
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.writeHead(500, CORS_HEADERS);
+      }
+      res.end("Server error");
+    });
+    stream.pipe(res);
+  });
+}
