@@ -131,14 +131,14 @@ async function handleApi(req, res, url) {
     }
     clearRateLimit(`login:${clientIp(req)}:${String(body.email||"").toLowerCase()}`);
     const token = createSession(user.id);
-    sendJson(res, 200, { user: publicUser(user.id) }, [sessionCookie(token)]);
+    sendJson(res, 200, { user: publicUser(user.id) }, [setCookieHeader(sessionCookie(token))]);
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/logout") {
     const session = getSession(req);
     if (session) run("DELETE FROM sessions WHERE id = ?", [session.id], true);
-    sendJson(res, 200, { ok: true }, [clearSessionCookie()]);
+    sendJson(res, 200, { ok: true }, [setCookieHeader(clearSessionCookie())]);
     return;
   }
 
@@ -182,7 +182,7 @@ async function handleApi(req, res, url) {
     persistLegacyUsers();
 
     const token = createSession(userId);
-    sendJson(res, 201, { user: publicUser(userId) }, [sessionCookie(token)]);
+    sendJson(res, 201, { user: publicUser(userId) }, [setCookieHeader(sessionCookie(token))]);
     return;
   }
 
@@ -797,14 +797,27 @@ function clearSessionCookie() {
   });
 }
 
+function setCookieHeader(value) {
+  return { key: "Set-Cookie", value };
+}
+
 function sendJson(res, status, obj, extraHeaders = []) {
   const headers = {
     "Content-Type": "application/json",
     ...buildCorsHeaders(res.req),
   };
-  for (const h of extraHeaders) {
-    const [k, v] = h.split(/:(.+)/);
-    headers[k] = v;
+  for (const header of extraHeaders) {
+    if (!header) continue;
+    if (typeof header === "string") {
+      const [k, v] = header.split(/:(.+)/);
+      if (k && typeof v !== "undefined") {
+        headers[k] = v;
+      }
+      continue;
+    }
+    if (header && header.key) {
+      headers[header.key] = header.value;
+    }
   }
   res.writeHead(status, headers);
   res.end(JSON.stringify(obj));
@@ -1061,26 +1074,48 @@ function migrateLegacyJsonData() {
   if (fs.existsSync(LEGACY_USERS_FILE)) {
     const users = JSON.parse(fs.readFileSync(LEGACY_USERS_FILE, "utf8"));
     for (const u of users) {
-      const exists = get("SELECT id FROM users WHERE lower(email) = lower(?)", [u.email]);
-      if (exists) {
+      if (!u || !u.email || !u.id || !u.password_hash || !u.password_salt) {
         continue;
       }
-      if (!get("SELECT id FROM users WHERE id = ?", [u.id])) {
+
+      const existingByEmail = get("SELECT id FROM users WHERE lower(email) = lower(?)", [u.email]);
+      const existingById = get("SELECT id FROM users WHERE id = ?", [u.id]);
+
+      if (existingByEmail || existingById) {
         run(
-          "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?,?,?)",
+          `UPDATE users
+           SET email = ?, full_name = ?, channel_name = ?, role = ?, password_hash = ?, password_salt = ?, created_at = ?
+           WHERE id = ? OR lower(email) = lower(?)`,
           [
-            u.id,
             u.email,
-            u.full_name,
-            u.channel_name,
+            u.full_name || "",
+            u.channel_name || slugFromText(u.email.split("@")[0]),
             u.role || "user",
             u.password_hash,
             u.password_salt,
-            u.created_at || new Date().toISOString()
+            u.created_at || new Date().toISOString(),
+            u.id,
+            u.email,
           ],
           true
         );
+        continue;
       }
+
+      run(
+        "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?,?,?)",
+        [
+          u.id,
+          u.email,
+          u.full_name || "",
+          u.channel_name || slugFromText(u.email.split("@")[0]),
+          u.role || "user",
+          u.password_hash,
+          u.password_salt,
+          u.created_at || new Date().toISOString()
+        ],
+        true
+      );
     }
   }
 
