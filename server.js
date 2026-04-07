@@ -27,11 +27,6 @@ const ALLOWED_VIDEO_TYPES = new Set(["video/mp4","video/webm","video/quicktime"]
 const AUTH_WINDOW_MS = 1000 * 60 * 15;
 const MAX_LOGIN_ATTEMPTS = 10;
 const MAX_SIGNUP_ATTEMPTS = 5;
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-};
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -47,7 +42,20 @@ const MIME_TYPES = {
   ".webm": "video/webm",
   ".ico": "image/x-icon",
 };
+
+function buildCorsHeaders(req) {
+  const origin = req && req.headers && (req.headers.origin || req.headers.referer);
+  return {
+    "Access-Control-Allow-Origin": origin || "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
 const authLimiter = new Map();
+const liveChatStreams = new Map();
+const viewerCounts = new Map();
+const MAX_CHAT_STREAM_HISTORY = 200;
 function ensureDirectories() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -71,6 +79,7 @@ async function bootstrap() {
     : new SQL.Database();
 
   initDb();
+  ensureDefaultStocks();
   migrateLegacyJsonData();
   clearExpiredSessions();
 
@@ -103,7 +112,7 @@ async function bootstrap() {
 async function handleApi(req, res, url) {
   const parts = url.pathname.split("/").filter(Boolean);
   if (req.method === "OPTIONS") {
-    sendOptions(res);
+    sendOptions(res, req);
     return;
   }
 
@@ -198,6 +207,13 @@ async function handleApi(req, res, url) {
     }
     return;
   }
+
+  if (req.method === "GET" && url.pathname === "/api/videos/live-viewers") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, { counts: getLiveViewerCounts() });
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/api/videos") {
     const user = requireUser(req, res);
     if (!user) return;
@@ -249,6 +265,113 @@ async function handleApi(req, res, url) {
   }
   if (parts[1] === "videos" && parts[2]) {
     const videoId = parts[2];
+
+    if (parts[3] === "chat") {
+      if (parts[4] === "stream" && req.method === "GET") {
+        const user = requireUser(req, res);
+        if (!user) return;
+        const video = getVideoRow(videoId);
+        if (!video) {
+          sendJson(res, 404, { error: "Video not found." });
+          return;
+        }
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          ...buildCorsHeaders(req),
+        });
+        res.write("retry: 10000\n\n");
+        const cleanup = registerLiveChatClient(videoId, res);
+        let closed = false;
+        const onClose = () => {
+          if (closed) return;
+          closed = true;
+          cleanup();
+          res.end();
+        };
+        req.on("close", onClose);
+        req.on("end", onClose);
+        return;
+      }
+
+      if (req.method === "GET") {
+        const video = getVideoRow(videoId);
+        if (!video) {
+          sendJson(res, 404, { error: "Video not found." });
+          return;
+        }
+        const messages = listLiveChatMessages(videoId);
+        sendJson(res, 200, { messages });
+        return;
+      }
+
+      if (req.method === "POST") {
+        const user = requireUser(req, res);
+        if (!user) return;
+        const video = getVideoRow(videoId);
+        if (!video) {
+          sendJson(res, 404, { error: "Video not found." });
+          return;
+        }
+        const body = await readJson(req);
+        const message = String(body.message || "").trim();
+        if (!message) {
+          sendJson(res, 400, { error: "Message is required." });
+          return;
+        }
+        const record = insertLiveChatMessage(videoId, user.id, message);
+        const payload = formatChatPayload(record);
+        broadcastToLiveChat(videoId, "chat", payload);
+        sendJson(res, 201, { message: payload });
+        return;
+      }
+    }
+
+    if (parts[3] === "comments") {
+      if (req.method === "GET" && parts.length === 4) {
+        const comments = listCommentsForVideo(videoId);
+        sendJson(res, 200, { comments });
+        return;
+      }
+      if (req.method === "POST") {
+        const user = requireUser(req, res);
+        if (!user) return;
+        const video = getVideoRow(videoId);
+        if (!video) {
+          sendJson(res, 404, { error: "Video not found." });
+          return;
+        }
+        const body = await readJson(req);
+        const content = String(body.content || "").trim();
+        if (!content) {
+          sendJson(res, 400, { error: "Content is required." });
+          return;
+        }
+        const comment = insertComment(videoId, user.id, content);
+        sendJson(res, 201, { comment });
+        return;
+      }
+      if (req.method === "DELETE" && parts[4]) {
+        const user = requireUser(req, res);
+        if (!user) return;
+        const comment = get(
+          "SELECT user_id FROM comments WHERE id = ? AND video_id = ?",
+          [parts[4], videoId]
+        );
+        if (!comment) {
+          sendJson(res, 404, { error: "Comment not found." });
+          return;
+        }
+        if (comment.user_id !== user.id && user.role !== "admin") {
+          sendJson(res, 403, { error: "You cannot delete this comment." });
+          return;
+        }
+        deleteComment(videoId, parts[4]);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+    }
 
     if (req.method === "DELETE" && parts.length === 3) {
       const user = requireUser(req, res);
@@ -507,6 +630,26 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/stocks/mytube") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    const body = await readJson(req);
+    const price = Number(body.price);
+    const change = Number(body.change);
+    const changePercent = Number(body.changePercent ?? body.change_percent ?? 0);
+    if (Number.isNaN(price) || Number.isNaN(change) || Number.isNaN(changePercent)) {
+      sendJson(res, 400, { error: "Invalid stock values." });
+      return;
+    }
+    updateMyTubeStock({ price, change, changePercent });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   sendJson(res, 404, { error: "Not found." });
 }
 function readJson(req) {
@@ -633,25 +776,27 @@ function createSession(userId) {
 function sessionCookie(token) {
   return cookie.serialize(SESSION_COOKIE, token, {
     httpOnly: true,
-    sameSite: "strict",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: SESSION_TTL_MS / 1000
+    maxAge: SESSION_TTL_MS / 1000,
   });
 }
 
 function clearSessionCookie() {
   return cookie.serialize(SESSION_COOKIE, "", {
     httpOnly: true,
-    sameSite: "strict",
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 0
+    maxAge: 0,
   });
 }
 
 function sendJson(res, status, obj, extraHeaders = []) {
   const headers = {
     "Content-Type": "application/json",
-    ...CORS_HEADERS,
+    ...buildCorsHeaders(res.req),
   };
   for (const h of extraHeaders) {
     const [k, v] = h.split(/:(.+)/);
@@ -661,8 +806,8 @@ function sendJson(res, status, obj, extraHeaders = []) {
   res.end(JSON.stringify(obj));
 }
 
-function sendOptions(res) {
-  res.writeHead(204, CORS_HEADERS);
+function sendOptions(res, req) {
+  res.writeHead(204, buildCorsHeaders(req));
   res.end();
 }
 
@@ -673,8 +818,16 @@ function isMutationMethod(method) {
 function assertSameOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return;
-  const host = `http://${req.headers.host}`;
-  if (origin !== host) throw new Error("Origin mismatch.");
+  try {
+    const originUrl = new URL(origin);
+    const hostHeader = String(req.headers.host || "");
+    const headerHost = hostHeader.split(":")[0];
+    if (originUrl.hostname !== headerHost) {
+      throw new Error("Origin mismatch.");
+    }
+  } catch {
+    throw new Error("Origin mismatch.");
+  }
 }
 
 function clientIp(req) {
@@ -816,6 +969,37 @@ function initDb() {
     )`
   );
 
+  run(
+    `CREATE TABLE IF NOT EXISTS comments (
+      id TEXT PRIMARY KEY,
+      video_id TEXT,
+      user_id TEXT,
+      content TEXT,
+      created_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS live_chat_messages (
+      id TEXT PRIMARY KEY,
+      video_id TEXT,
+      user_id TEXT,
+      message TEXT,
+      created_at TEXT
+    )`
+  );
+
+  run(
+    `CREATE TABLE IF NOT EXISTS stocks (
+      symbol TEXT PRIMARY KEY,
+      display_name TEXT,
+      price REAL,
+      change REAL,
+      change_percent REAL,
+      updated_at TEXT
+    )`
+  );
+
   ensureSignalSourceColumn();
 }
 
@@ -825,6 +1009,18 @@ function ensureSignalSourceColumn() {
     run("ALTER TABLE signals ADD COLUMN source TEXT");
   }
   run("UPDATE signals SET source = 'broadcaster' WHERE source IS NULL", [], true);
+}
+
+function ensureDefaultStocks() {
+  const now = new Date().toISOString();
+  const entry = get("SELECT symbol FROM stocks WHERE symbol = ?", ["mytube.co"]);
+  if (!entry) {
+    run(
+      "INSERT INTO stocks (symbol, display_name, price, change, change_percent, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ["mytube.co", "mytube.co", 100, 0, 0, now],
+      true
+    );
+  }
 }
 
 function migrateLegacyJsonData() {
@@ -913,6 +1109,144 @@ function listVideos() {
   }));
 }
 
+function listCommentsForVideo(videoId) {
+  return all(
+    `SELECT c.id, c.content, c.created_at, u.id AS user_id, u.channel_name, u.full_name
+     FROM comments c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.video_id = ?
+     ORDER BY c.created_at DESC
+     LIMIT 200`,
+    [videoId]
+  );
+}
+
+function insertComment(videoId, userId, content) {
+  const id = createId("comment");
+  const createdAt = new Date().toISOString();
+  run(
+    "INSERT INTO comments (id, video_id, user_id, content, created_at) VALUES (?, ?, ?, ?, ?)",
+    [id, videoId, userId, content, createdAt],
+    true
+  );
+  return get(
+    `SELECT c.id, c.content, c.created_at, u.id AS user_id, u.channel_name, u.full_name
+     FROM comments c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.id = ?`,
+    [id]
+  );
+}
+
+function deleteComment(videoId, commentId) {
+  run("DELETE FROM comments WHERE id = ? AND video_id = ?", [commentId, videoId], true);
+}
+
+function listLiveChatMessages(videoId, limit = 80) {
+  return all(
+    `SELECT c.id, c.video_id, c.message, c.created_at, u.id AS user_id, u.channel_name, u.full_name
+     FROM live_chat_messages c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.video_id = ?
+     ORDER BY c.created_at ASC
+     LIMIT ?`,
+    [videoId, limit]
+  );
+}
+
+function insertLiveChatMessage(videoId, userId, message) {
+  const id = createId("lchat");
+  const createdAt = new Date().toISOString();
+  run(
+    "INSERT INTO live_chat_messages (id, video_id, user_id, message, created_at) VALUES (?, ?, ?, ?, ?)",
+    [id, videoId, userId, message, createdAt],
+    true
+  );
+  return get(
+    `SELECT c.id, c.video_id, c.message, c.created_at, u.id AS user_id, u.channel_name, u.full_name
+     FROM live_chat_messages c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.id = ?`,
+    [id]
+  );
+}
+
+function formatChatPayload(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    videoId: row.video_id,
+    message: row.message,
+    created_at: row.created_at,
+    user_id: row.user_id,
+    channel_name: row.channel_name,
+    full_name: row.full_name,
+  };
+}
+
+function getLiveViewerCounts() {
+  return Object.fromEntries(Array.from(viewerCounts.entries()));
+}
+
+function adjustViewerCount(videoId, delta) {
+  const current = viewerCounts.get(videoId) || 0;
+  const next = Math.max(0, current + delta);
+  if (next === 0) {
+    viewerCounts.delete(videoId);
+  } else {
+    viewerCounts.set(videoId, next);
+  }
+  broadcastViewerCount(videoId);
+}
+
+function broadcastViewerCount(videoId) {
+  const count = viewerCounts.get(videoId) || 0;
+  broadcastToLiveChat(videoId, "viewer-count", { videoId, count });
+}
+
+function broadcastToLiveChat(videoId, event, payload) {
+  const clients = liveChatStreams.get(videoId);
+  if (!clients || !clients.size) return;
+  const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of clients) {
+    try {
+      client.write(data);
+    } catch {
+      // ignore write errors
+    }
+  }
+}
+
+function registerLiveChatClient(videoId, res) {
+  ensureViewerCountInitialized(videoId);
+  const next = liveChatStreams.get(videoId) || new Set();
+  next.add(res);
+  liveChatStreams.set(videoId, next);
+  adjustViewerCount(videoId, 1);
+  if (viewerCounts.has(videoId)) {
+    broadcastViewerCount(videoId);
+  }
+  return () => {
+    next.delete(res);
+    adjustViewerCount(videoId, -1);
+  };
+}
+
+function ensureViewerCountInitialized(videoId) {
+  if (!viewerCounts.has(videoId)) {
+    viewerCounts.set(videoId, 0);
+  }
+}
+
+function updateMyTubeStock(values) {
+  const now = new Date().toISOString();
+  run(
+    `UPDATE stocks SET price = ?, change = ?, change_percent = ?, updated_at = ? WHERE symbol = ?`,
+    [values.price, values.change, values.changePercent, now, "mytube.co"],
+    true
+  );
+}
+
 function getVideoRow(id) {
   return get("SELECT * FROM videos WHERE id = ?", [id]);
 }
@@ -963,23 +1297,47 @@ function verifyPassword(user, password) {
   return hash === user.password_hash;
 }
 
-async function fetchStocks() {
+async function fetchRealStockQuotes() {
   const symbols = STOCK_SYMBOLS.join(",");
   const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols}`;
   return new Promise((resolve, reject) => {
-    https.get(url, res => {
+    https.get(url, (res) => {
       let data = "";
-      res.on("data", chunk => (data += chunk));
+      res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
         try {
           const json = JSON.parse(data);
-          resolve(json.quoteResponse.result || []);
+          const result = json.quoteResponse?.result || [];
+          const normalized = result.map((item) => ({
+            symbol: item.symbol,
+            shortName: item.shortName || item.longName || item.symbol,
+            price: Number(item.regularMarketPrice || item.lastPrice || 0),
+            change: Number(item.regularMarketChange || item.regularMarketChangePercent || 0),
+            changePercent: Number(item.regularMarketChangePercent || 0),
+            marketState: item.marketState || "REGULAR",
+          }));
+          resolve(normalized);
         } catch (e) {
           reject(e);
         }
       });
     }).on("error", reject);
   });
+}
+
+async function fetchStocks() {
+  const realStocks = await fetchRealStockQuotes();
+  const customStocks = all("SELECT symbol, display_name, price, change, change_percent, updated_at FROM stocks");
+  const normalizedCustom = customStocks.map((row) => ({
+    symbol: row.symbol,
+    shortName: row.display_name || row.symbol,
+    price: Number(row.price || 0),
+    change: Number(row.change || 0),
+    changePercent: Number(row.change_percent || 0),
+    marketState: "LOCAL",
+    updated_at: row.updated_at,
+  }));
+  return [...normalizedCustom, ...realStocks];
 }
 
 function isUnderDirectory(filePath, directory) {
@@ -1006,25 +1364,28 @@ function serveStatic(req, res, pathname) {
   const allowedRoot = pathname.startsWith("/uploads/") ? ABS_UPLOADS : ABS_ROOT;
   const resolved = path.resolve(targetPath);
   if (!isUnderDirectory(resolved, allowedRoot)) {
-    res.writeHead(403, CORS_HEADERS);
+    res.writeHead(403, buildCorsHeaders(req));
     res.end("Forbidden");
     return;
   }
 
   fs.stat(resolved, (err, stats) => {
     if (err || !stats.isFile()) {
-      res.writeHead(404, CORS_HEADERS);
+      res.writeHead(404, buildCorsHeaders(req));
       res.end("Not found");
       return;
     }
 
     const ext = path.extname(resolved).toLowerCase();
-    const headers = { "Content-Type": MIME_TYPES[ext] || "application/octet-stream", ...CORS_HEADERS };
+    const headers = {
+      "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
+      ...buildCorsHeaders(req),
+    };
     res.writeHead(200, headers);
     const stream = fs.createReadStream(resolved);
     stream.on("error", () => {
       if (!res.headersSent) {
-        res.writeHead(500, CORS_HEADERS);
+        res.writeHead(500, buildCorsHeaders(req));
       }
       res.end("Server error");
     });

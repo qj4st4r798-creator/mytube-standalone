@@ -16,6 +16,11 @@ const state = {
   lastViewedRoute: "",
   liveBroadcastId: "",
   liveCameraEnabled: false,
+  liveChatMessagesByVideo: {},
+  chatDraft: "",
+  commentsByVideo: {},
+  commentDraft: "",
+  liveViewerCounts: {},
 };
 
 const runtime = {
@@ -28,6 +33,9 @@ const runtime = {
   viewerPC: null,
   viewerPoll: null,
   viewerVideoId: "",
+  liveChatSource: null,
+  liveChatVideoId: "",
+  liveViewerPoller: null,
 };
 
 const routeTable = [
@@ -160,6 +168,11 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (action === "delete-comment") {
+    await deleteComment(button.dataset.videoId, button.dataset.commentId);
+    return;
+  }
+
   if (action === "enable-camera") {
     await enableCamera();
     return;
@@ -197,6 +210,43 @@ document.addEventListener("submit", async (event) => {
   if (form.matches("[data-upload-form]")) {
     event.preventDefault();
     await createVideo(new FormData(form));
+  }
+
+  if (form.matches("[data-live-chat-form]")) {
+    event.preventDefault();
+    const videoId = form.dataset.videoId;
+    const message = String(new FormData(form).get("message") || "").trim();
+    if (message) {
+      await sendLiveChatMessage(videoId, message);
+    }
+    return;
+  }
+
+  if (form.matches("[data-comment-form]")) {
+    event.preventDefault();
+    const videoId = form.dataset.videoId;
+    const content = String(new FormData(form).get("comment") || "").trim();
+    if (content) {
+      await postComment(videoId, content);
+    }
+    return;
+  }
+
+  if (form.matches("[data-mytube-stock-form]")) {
+    event.preventDefault();
+    await updateMyTubeStock(form);
+    return;
+  }
+});
+
+document.addEventListener("input", (event) => {
+  const chatInput = event.target.closest("[data-live-chat-input]");
+  if (chatInput) {
+    state.chatDraft = chatInput.value;
+  }
+  const commentInput = event.target.closest("[data-comment-input]");
+  if (commentInput) {
+    state.commentDraft = commentInput.value;
   }
 });
 
@@ -323,6 +373,17 @@ async function handleRouteEffects() {
       state.notice = error.message;
     }
   }
+
+  if (state.route.name === "watch") {
+    const video = state.videos.find((entry) => entry.id === state.route.params.id);
+    if (video) {
+      if (video.is_live) {
+        void loadLiveChatHistory(video.id);
+      } else {
+        await loadComments(video.id);
+      }
+    }
+  }
 }
 
 async function login(formData) {
@@ -431,7 +492,94 @@ async function createVideo(formData) {
       state.uploadLoading = false;
       render();
     }
+}
+
+async function sendLiveChatMessage(videoId, message) {
+  try {
+    await api(`/api/videos/${encodeURIComponent(videoId)}/chat`, {
+      method: "POST",
+      body: { message },
+    });
+    state.chatDraft = "";
+    render();
+  } catch (error) {
+    state.notice = error.message;
+    render();
   }
+}
+
+async function postComment(videoId, content) {
+  state.commentDraft = "";
+  render();
+  try {
+    await api(`/api/videos/${encodeURIComponent(videoId)}/comments`, {
+      method: "POST",
+      body: { content },
+    });
+    await loadComments(videoId);
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
+async function deleteComment(videoId, commentId) {
+  try {
+    await api(`/api/videos/${encodeURIComponent(videoId)}/comments/${encodeURIComponent(commentId)}`, {
+      method: "DELETE",
+    });
+    await loadComments(videoId);
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
+async function loadComments(videoId) {
+  try {
+    const payload = await api(`/api/videos/${encodeURIComponent(videoId)}/comments`);
+    state.commentsByVideo[videoId] = payload.comments || [];
+    render();
+  } catch (error) {
+    state.commentsByVideo[videoId] = [];
+    render();
+  }
+}
+
+async function loadLiveChatHistory(videoId) {
+  try {
+    const payload = await api(`/api/videos/${encodeURIComponent(videoId)}/chat`);
+    state.liveChatMessagesByVideo[videoId] = payload.messages || [];
+    render();
+  } catch {
+    state.liveChatMessagesByVideo[videoId] = [];
+  }
+}
+
+async function updateMyTubeStock(form) {
+  const formData = new FormData(form);
+  const price = Number(formData.get("price"));
+  const change = Number(formData.get("change"));
+  const changePercent = Number(formData.get("change_percent") ?? formData.get("changePercent") ?? 0);
+  if (Number.isNaN(price) || Number.isNaN(change) || Number.isNaN(changePercent)) {
+    state.notice = "Invalid stock values.";
+    render();
+    return;
+  }
+
+  try {
+    await api("/api/stocks/mytube", {
+      method: "POST",
+      body: { price, change, changePercent },
+    });
+    await refreshStocks();
+    state.notice = "MyTube stock updated.";
+    render();
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
 
 async function startLiveBroadcast(videoId) {
   if (!runtime.cameraStream) {
@@ -606,6 +754,20 @@ function syncBackgroundEffects() {
     clearInterval(runtime.pagePollTimer);
     runtime.pagePollTimer = null;
   }
+
+  const hasLiveVideo = state.videos.some((video) => video.is_live);
+  if (!state.user) {
+    if (runtime.liveViewerPoller) {
+      clearInterval(runtime.liveViewerPoller);
+      runtime.liveViewerPoller = null;
+    }
+  } else if (hasLiveVideo && !runtime.liveViewerPoller) {
+    updateLiveViewerCounts();
+    runtime.liveViewerPoller = window.setInterval(updateLiveViewerCounts, 5000);
+  } else if (!hasLiveVideo && runtime.liveViewerPoller) {
+    clearInterval(runtime.liveViewerPoller);
+    runtime.liveViewerPoller = null;
+  }
 }
 
 function cleanupLiveConnection() {
@@ -632,6 +794,16 @@ async function refreshStocks() {
       state.notice = error.message;
       render();
     }
+  }
+}
+
+async function updateLiveViewerCounts() {
+  try {
+    const payload = await api("/api/videos/live-viewers");
+    state.liveViewerCounts = payload.counts || {};
+    render();
+  } catch (error) {
+    console.error("Viewer count poll failed:", error);
   }
 }
 
@@ -662,6 +834,61 @@ async function stopLiveBroadcast() {
   state.liveCameraEnabled = false;
   await refreshAppData();
   render();
+}
+
+async function startLiveChatStream(videoId) {
+  stopLiveChatStream();
+
+  runtime.liveChatVideoId = videoId;
+
+  try {
+    const source = new EventSource(`/api/videos/${encodeURIComponent(videoId)}/chat/stream`, {
+      withCredentials: true,
+    });
+    runtime.liveChatSource = source;
+    runtime.liveChatVideoId = videoId;
+
+    source.addEventListener("chat", (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        const existing = state.liveChatMessagesByVideo[videoId] || [];
+        const next = [...existing, payload];
+        if (next.length > 200) {
+          next.splice(0, next.length - 200);
+        }
+        state.liveChatMessagesByVideo[videoId] = next;
+        render();
+      } catch (error) {
+        console.error("Live chat parse error:", error);
+      }
+    });
+
+    source.addEventListener("viewer-count", (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        state.liveViewerCounts[payload.videoId] = payload.count;
+        render();
+      } catch (error) {
+        console.error("Viewer count parse error:", error);
+      }
+    });
+
+    source.onerror = () => {
+      console.error("Live chat stream closed.");
+    };
+    await loadLiveChatHistory(videoId).catch(() => {});
+  } catch (error) {
+    console.error("Failed to start live chat:", error);
+    stopLiveChatStream();
+  }
+}
+
+function stopLiveChatStream() {
+  if (runtime.liveChatSource) {
+    runtime.liveChatSource.close();
+    runtime.liveChatSource = null;
+  }
+  runtime.liveChatVideoId = "";
 }
 // ======================================================
 //  LIVE STREAMING HELPERS (FRAME + WEBRTC VIEWER)
@@ -792,6 +1019,7 @@ function render() {
   syncLivePreview();
   syncBackgroundEffects();
   syncLiveViewer();
+  syncLiveChatStream();
 }
 
 function renderPublicPage() {
@@ -1013,6 +1241,22 @@ function renderPage() {
   }
 }
 
+function syncLiveChatStream() {
+  if (state.route.name !== "watch") {
+    stopLiveChatStream();
+    return;
+  }
+  const video = state.videos.find((entry) => entry.id === state.route.params.id);
+  if (!video || !video.is_live) {
+    stopLiveChatStream();
+    return;
+  }
+  if (runtime.liveChatVideoId === video.id && runtime.liveChatSource) {
+    return;
+  }
+  void startLiveChatStream(video.id);
+}
+
 function renderFeedPage(title, description, videos, options = {}) {
   const showCreate = options.showCreate !== false;
   return `
@@ -1133,7 +1377,8 @@ function renderWatchPage() {
             <span>${formatCount(video.views)} views</span>
             <span>${formatCount(video.likes)} likes</span>
             <span>${escapeHtml(video.duration || "0:00")}</span>
-            ${video.is_live ? '<span class="rounded-full bg-red-500/15 px-3 py-1 text-xs text-red-300">LIVE</span>' : ""}
+            ${video.is_live ? `<span class="rounded-full bg-red-500/15 px-3 py-1 text-xs text-red-300">LIVE</span>` : ""}
+            ${video.is_live ? `<span class="rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">${formatCount(state.liveViewerCounts[video.id] || 0)} viewing</span>` : ""}
           </div>
           <div class="mt-5 flex flex-wrap gap-3">
             <button class="${primaryButtonClass()}" data-action="like-video" data-video-id="${video.id}">
@@ -1164,6 +1409,7 @@ function renderWatchPage() {
                 : ""
             }
           </div>
+          ${video.is_live ? renderLiveChatPanel(video) : renderCommentSection(video)}
         </div>
         <div>
           <h2 class="text-xl font-semibold mb-4">Up Next</h2>
@@ -1400,6 +1646,7 @@ function renderAdminPage() {
     return renderEmptyState("Admin access required", "This panel is only available to admins.");
   }
 
+  const mytubeStock = state.stocks.find((stock) => (stock.symbol || "").toLowerCase() === "mytube.co");
   const reported = state.videos.filter((video) => Number(video.report_count || 0) > 0).sort((a, b) => (b.report_count || 0) - (a.report_count || 0));
 
   return `
@@ -1417,6 +1664,31 @@ function renderAdminPage() {
         ${statCard("Reported Videos", String(reported.length))}
         ${statCard("Total Reports", String(reported.reduce((sum, video) => sum + Number(video.report_count || 0), 0)))}
       </div>
+
+      <section class="rounded-3xl border border-border bg-card p-6 mb-8">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h2 class="text-xl font-semibold">MyTube Stock</h2>
+            <p class="text-sm text-muted-foreground">Adjust the MyTube stock price and movement that shows up on the stock page.</p>
+          </div>
+          <span class="text-xs text-muted-foreground">Live price</span>
+        </div>
+          <form data-mytube-stock-form class="mt-6 grid gap-4 md:grid-cols-4">
+            <label class="space-y-1 text-sm text-muted-foreground">
+              Price
+              <input class="${inputClass()}" name="price" type="number" step="0.01" value="${escapeAttr(mytubeStock?.price || 0)}" />
+            </label>
+            <label class="space-y-1 text-sm text-muted-foreground">
+              Change
+              <input class="${inputClass()}" name="change" type="number" step="0.01" value="${escapeAttr(mytubeStock?.change || 0)}" />
+            </label>
+            <label class="space-y-1 text-sm text-muted-foreground">
+              Change %
+              <input class="${inputClass()}" name="change_percent" type="number" step="0.01" value="${escapeAttr(mytubeStock?.changePercent || 0)}" />
+            </label>
+          <button class="${primaryButtonClass()}" type="submit">Update MyTube Stock</button>
+        </form>
+      </section>
 
       <section class="rounded-3xl border border-border bg-card p-6">
         <h2 class="text-xl font-semibold mb-4">Reported Videos</h2>
@@ -1481,7 +1753,10 @@ function renderVideoCard(video) {
             <button class="text-sm text-muted-foreground mt-1 hover:text-foreground" data-route="/channel/${encodeURIComponent(video.channel_name)}">
               ${escapeHtml(video.channel_name)}
             </button>
-            <p class="text-xs text-muted-foreground mt-1">${formatCount(video.views)} views • ${formatCount(video.likes)} likes${video.is_live ? " • LIVE" : ""}</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              ${formatCount(video.views)} views • ${formatCount(video.likes)} likes
+              ${video.is_live ? ` • LIVE • ${formatCount(state.liveViewerCounts[video.id] || 0)} watching` : ""}
+            </p>
           </div>
         </div>
         <div class="mt-4 flex flex-wrap gap-2">
@@ -1750,6 +2025,99 @@ function navIcon(label) {
     default:
       return iconVideo(classes);
   }
+}
+
+function renderLiveChatPanel(video) {
+  const messages = state.liveChatMessagesByVideo[video.id] || [];
+  const viewerCount = Number(state.liveViewerCounts[video.id] || 0);
+  return `
+    <section class="mt-6 rounded-3xl border border-border bg-card p-5 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Live chat</h2>
+        <span class="text-xs text-muted-foreground">${viewerCount} viewer${viewerCount === 1 ? "" : "s"} watching</span>
+      </div>
+      <div class="max-h-64 overflow-y-auto space-y-3">
+        ${messages.length
+          ? messages.map((message) => renderLiveChatMessage(message)).join("")
+          : `<p class="text-sm text-muted-foreground">Chat is waiting for the first message...</p>`}
+      </div>
+      ${state.user
+        ? `<form data-live-chat-form class="flex items-center gap-3" data-video-id="${video.id}">
+            <input
+              class="${inputClass("flex-1")}"
+              name="message"
+              placeholder="Say something..."
+              autocomplete="off"
+              value="${escapeAttr(state.chatDraft)}"
+              data-live-chat-input
+            />
+            <button class="${primaryButtonClass()}" type="submit">Send</button>
+          </form>`
+        : `<p class="text-sm text-muted-foreground">Sign in to join the chat.</p>`}
+    </section>
+  `;
+}
+
+function renderLiveChatMessage(message) {
+  const label = escapeHtml(message.channel_name || message.full_name || "User");
+  const text = escapeHtml(message.message || "");
+  const timeStamp = message.created_at ? new Date(message.created_at).toLocaleTimeString() : "";
+  return `
+    <div class="flex items-start gap-3 text-sm">
+      <div class="flex flex-col gap-0.5">
+        <span class="font-semibold text-primary">${label}</span>
+        <span class="text-xs text-muted-foreground">${escapeHtml(timeStamp)}</span>
+      </div>
+      <p class="text-sm text-foreground">${text}</p>
+    </div>
+  `;
+}
+
+function renderCommentSection(video) {
+  const comments = state.commentsByVideo[video.id] || [];
+  return `
+    <section class="mt-6 rounded-3xl border border-border bg-card p-5 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Comments</h2>
+        <span class="text-xs text-muted-foreground">${comments.length} comment${comments.length === 1 ? "" : "s"}</span>
+      </div>
+      ${state.user
+        ? `<form data-comment-form class="space-y-3" data-video-id="${video.id}">
+            <textarea
+              class="${textareaClass()}"
+              name="comment"
+              placeholder="Share your thoughts..."
+              data-comment-input
+            >${escapeHtml(state.commentDraft)}</textarea>
+            <button class="${primaryButtonClass()}" type="submit">Post comment</button>
+          </form>`
+        : `<p class="text-sm text-muted-foreground">Log in to leave a comment.</p>`}
+      <div class="space-y-3">
+        ${comments.length
+          ? comments.map((comment) => renderCommentRow(comment, video.id)).join("")
+          : `<p class="text-sm text-muted-foreground">No comments yet. Be the first to leave one.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderCommentRow(comment, videoId) {
+  const author = escapeHtml(comment.channel_name || comment.full_name || "User");
+  const body = escapeHtml(comment.content || "");
+  const timestamp = comment.created_at ? new Date(comment.created_at).toLocaleString() : "";
+  const canDelete = state.user && (state.user.role === "admin" || state.user.id === comment.user_id);
+  return `
+    <div class="rounded-2xl border border-border/50 bg-background/60 p-4 text-sm text-foreground">
+      <div class="flex justify-between gap-3">
+        <div>
+          <p class="font-semibold text-foreground">${author}</p>
+          <p class="text-xs text-muted-foreground">${escapeHtml(timestamp)}</p>
+        </div>
+        ${canDelete ? `<button class="${secondaryButtonClass("text-xs")}" data-action="delete-comment" data-video-id="${videoId}" data-comment-id="${comment.id}">Delete</button>` : ""}
+      </div>
+      <p class="mt-3 text-sm text-muted-foreground whitespace-pre-wrap">${body}</p>
+    </div>
+  `;
 }
 
 function escapeHtml(value) {
