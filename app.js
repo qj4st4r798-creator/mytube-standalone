@@ -17,6 +17,7 @@ const state = {
   liveBroadcastId: "",
   liveCameraEnabled: false,
   liveChatMessagesByVideo: {},
+  liveFrameByVideo: {},
   chatDraft: "",
   commentsByVideo: {},
   commentDraft: "",
@@ -28,6 +29,8 @@ const runtime = {
   captureVideo: null,
   broadcastPeers: {},
   liveSignalTimer: null,
+  liveFrameTimer: null,
+  liveFrameUploadInFlight: false,
   pagePollTimer: null,
   stockPollTimer: null,
   viewerPC: null,
@@ -588,6 +591,12 @@ async function startLiveBroadcast(videoId) {
   }
 
   cleanupLiveConnection();
+  await pushLiveFrame(videoId).catch(() => {});
+  runtime.liveFrameTimer = window.setInterval(() => {
+    pushLiveFrame(videoId).catch((error) => {
+      console.error("Live frame push error:", error);
+    });
+  }, 180);
 
   runtime.liveSignalTimer = setInterval(async () => {
     try {
@@ -704,6 +713,7 @@ async function deleteVideo(videoId) {
     delete state.liveChatMessagesByVideo[videoId];
     delete state.commentsByVideo[videoId];
     delete state.liveViewerCounts[videoId];
+    delete state.liveFrameByVideo[videoId];
     await refreshAppData();
     state.notice = "Video deleted.";
     if (state.route.name === "watch" && state.route.params.id === videoId) {
@@ -816,6 +826,11 @@ function cleanupLiveConnection() {
     clearInterval(runtime.liveSignalTimer);
     runtime.liveSignalTimer = null;
   }
+  if (runtime.liveFrameTimer) {
+    clearInterval(runtime.liveFrameTimer);
+    runtime.liveFrameTimer = null;
+  }
+  runtime.liveFrameUploadInFlight = false;
   for (const peerId of Object.keys(runtime.broadcastPeers)) {
     removeBroadcastPeer(peerId);
   }
@@ -854,6 +869,7 @@ async function stopLiveBroadcast() {
     try {
       await api(`/api/videos/${encodeURIComponent(state.liveBroadcastId)}/stop-live`, { method: "POST" });
       state.notice = "Live broadcast ended.";
+      delete state.liveFrameByVideo[state.liveBroadcastId];
     } catch (error) {
       state.notice = error.message;
     }
@@ -913,6 +929,18 @@ async function startLiveChatStream(videoId) {
       }
     });
 
+    source.addEventListener("frame", (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.videoId && payload.frame) {
+          state.liveFrameByVideo[payload.videoId] = payload.frame;
+          syncLiveImageElement(payload.videoId);
+        }
+      } catch (error) {
+        console.error("Live frame parse error:", error);
+      }
+    });
+
     source.onerror = () => {
       console.error("Live chat stream closed.");
     };
@@ -937,7 +965,7 @@ function stopLiveChatStream() {
 // Keep this for compatibility with old live-frame system
 async function pushLiveFrame(videoId) {
   const source = runtime.captureVideo;
-  if (!source || !runtime.cameraStream) return;
+  if (!source || !runtime.cameraStream || runtime.liveFrameUploadInFlight) return;
 
   const canvas = document.createElement("canvas");
   canvas.width = source.videoWidth || 1280;
@@ -945,111 +973,34 @@ async function pushLiveFrame(videoId) {
   const context = canvas.getContext("2d");
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
   const frame = canvas.toDataURL("image/webp", 0.6);
-
-  await api(`/api/videos/${encodeURIComponent(videoId)}/frame`, {
-    method: "POST",
-    body: { current_frame_url: frame },
-  });
+  runtime.liveFrameUploadInFlight = true;
+  try {
+    state.liveFrameByVideo[videoId] = frame;
+    syncLiveImageElement(videoId);
+    await api(`/api/videos/${encodeURIComponent(videoId)}/frame`, {
+      method: "POST",
+      body: { current_frame_url: frame },
+    });
+  } finally {
+    runtime.liveFrameUploadInFlight = false;
+  }
 }
 
-// ======================================================
-//  WEBRTC VIEWER — connects to broadcaster
-// ======================================================
 async function startLiveViewer(videoId) {
-  stopLiveViewer();
-
-  const videoEl = document.getElementById("live-player");
-  if (!videoEl) {
-    return;
-  }
-
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  });
-  runtime.viewerPC = pc;
   runtime.viewerVideoId = videoId;
-  runtime.viewerPeerId = cryptoRandomId();
-
-  pc.ontrack = (event) => {
-    videoEl.srcObject = event.streams[0];
-  };
-
-  pc.onicecandidate = (event) => {
-    if (event.candidate) {
-      api(`/api/videos/${videoId}/signal`, {
-        method: "POST",
-        body: { type: "candidate", candidate: event.candidate, source: "viewer", peer_id: runtime.viewerPeerId },
-      }).catch(() => {});
-    }
-  };
-
-  await api(`/api/videos/${videoId}/signal`, {
-    method: "POST",
-    body: { type: "viewer-ready", source: "viewer", peer_id: runtime.viewerPeerId },
-  });
-
-  let answered = false;
-  const pendingCandidates = [];
-
-  const pollSignals = async () => {
-    try {
-      const { signals = [] } = await api(`/api/videos/${videoId}/signal?for=viewer&peer_id=${encodeURIComponent(runtime.viewerPeerId)}`);
-      for (const signal of signals) {
-        if (signal.type === "offer" && signal.offer && !pc.currentRemoteDescription && !answered) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await api(`/api/videos/${videoId}/signal`, {
-            method: "POST",
-            body: { type: "answer", answer, source: "viewer", peer_id: runtime.viewerPeerId },
-          });
-          answered = true;
-          for (const candidate of pendingCandidates) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          }
-          pendingCandidates.length = 0;
-        }
-        if (signal.type === "candidate" && signal.candidate) {
-          if (pc.currentRemoteDescription) {
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-          } else {
-            pendingCandidates.push(signal.candidate);
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Viewer signal poll error:", error);
-    }
-  };
-
-  await pollSignals();
-  runtime.viewerPoll = window.setInterval(pollSignals, 1000);
+  const video = state.videos.find((entry) => entry.id === videoId);
+  if (video && video.current_frame_url) {
+    state.liveFrameByVideo[videoId] = video.current_frame_url;
+  }
+  syncLiveImageElement(videoId);
 }
 
 function stopLiveViewer() {
-  const videoId = runtime.viewerVideoId;
-  const peerId = runtime.viewerPeerId;
   if (runtime.viewerPoll) {
     clearInterval(runtime.viewerPoll);
     runtime.viewerPoll = null;
   }
-  if (runtime.viewerPC) {
-    runtime.viewerPC.close();
-    runtime.viewerPC = null;
-  }
   runtime.viewerVideoId = "";
-  runtime.viewerPeerId = "";
-  const videoEl = document.getElementById("live-player");
-  if (videoEl) {
-    videoEl.srcObject = null;
-    videoEl.pause().catch(() => {});
-  }
-  if (videoId && peerId && state.user) {
-    api(`/api/videos/${encodeURIComponent(videoId)}/signal`, {
-      method: "POST",
-      body: { type: "viewer-left", source: "viewer", peer_id: peerId },
-    }).catch(() => {});
-  }
 }
 
 function syncLiveViewer() {
@@ -1062,17 +1013,20 @@ function syncLiveViewer() {
     stopLiveViewer();
     return;
   }
-  if (runtime.viewerVideoId === video.id && runtime.viewerPC) {
+  if (runtime.viewerVideoId === video.id) {
+    syncLiveImageElement(video.id);
     return;
   }
   void startLiveViewer(video.id).catch((error) => console.error("Live viewer failed:", error));
 }
 
-function cryptoRandomId() {
-  if (window.crypto && typeof window.crypto.randomUUID === "function") {
-    return window.crypto.randomUUID();
+function syncLiveImageElement(videoId) {
+  const imageEl = document.getElementById("live-player");
+  const frame = state.liveFrameByVideo[videoId];
+  if (!imageEl || !frame) return;
+  if (imageEl.tagName === "IMG" && imageEl.getAttribute("src") !== frame) {
+    imageEl.setAttribute("src", frame);
   }
-  return `peer_${Math.random().toString(16).slice(2)}_${Date.now()}`;
 }
 
 
@@ -1415,6 +1369,7 @@ function renderWatchPage() {
   const isLiked = (state.user.liked_video_ids || []).includes(video.id);
   const isSubscribed = (state.user.subscribed_channels || []).includes(video.channel_name);
   const isOwnChannel = state.user.channel_name === video.channel_name;
+  const liveFrame = state.liveFrameByVideo[video.id] || video.current_frame_url;
 
   return `
     <div class="p-4 md:p-6 max-w-[1800px] mx-auto">
@@ -1423,7 +1378,11 @@ function renderWatchPage() {
           <div class="aspect-video rounded-3xl overflow-hidden border border-border bg-card">
   ${
     video.is_live
-      ? `<video id="live-player" autoplay playsinline class="w-full h-full object-cover bg-black"></video>`
+      ? (
+        liveFrame
+          ? `<img id="live-player" class="w-full h-full object-cover bg-black" src="${escapeAttr(liveFrame)}" alt="${escapeAttr(video.title)}" />`
+          : `<div class="w-full h-full flex items-center justify-center bg-black text-muted-foreground">Waiting for live camera...</div>`
+      )
       : video.video_url
         ? `<video class="w-full h-full object-cover bg-black" src="${escapeAttr(video.video_url)}" controls playsinline preload="metadata"></video>`
         : video.thumbnail_url

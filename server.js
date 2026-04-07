@@ -580,6 +580,7 @@ async function handleApi(req, res, url) {
         [frame, frame, videoId],
         true
       );
+      broadcastToLiveChat(videoId, "frame", { videoId, frame });
       sendJson(res, 200, { ok: true });
       return;
     }
