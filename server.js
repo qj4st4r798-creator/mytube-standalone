@@ -415,7 +415,7 @@ async function handleApi(req, res, url) {
       if (req.method === "POST") {
         const body = await readJson(req);
         const type = String(body.type || "").trim();
-        const validTypes = new Set(["offer", "answer", "candidate"]);
+        const validTypes = new Set(["offer", "answer", "candidate", "viewer-ready", "viewer-left"]);
         if (!validTypes.has(type)) {
           sendJson(res, 400, { error: "Invalid signal type." });
           return;
@@ -441,6 +441,9 @@ async function handleApi(req, res, url) {
           }
           payload.candidate = body.candidate;
         }
+        if (body.peer_id) {
+          payload.peer_id = String(body.peer_id).trim();
+        }
 
         const source = body.source === "viewer" ? "viewer" : "broadcaster";
         run(
@@ -455,22 +458,31 @@ async function handleApi(req, res, url) {
       if (req.method === "GET") {
         const role = String(url.searchParams.get("for") || "viewer").toLowerCase();
         const desiredSource = role === "broadcaster" ? "viewer" : "broadcaster";
+        const peerId = String(url.searchParams.get("peer_id") || "").trim();
         const rows = all(
           "SELECT id, payload FROM signals WHERE video_id = ? AND source = ? ORDER BY created_at ASC",
           [videoId, desiredSource]
         );
         const signals = [];
+        const idsToDelete = [];
         for (const row of rows) {
           try {
-            signals.push(JSON.parse(row.payload));
+            const payload = JSON.parse(row.payload);
+            if (role === "viewer" && payload.peer_id && peerId && payload.peer_id !== peerId) {
+              continue;
+            }
+            if (role === "viewer" && payload.peer_id && !peerId) {
+              continue;
+            }
+            signals.push(payload);
+            idsToDelete.push(row.id);
           } catch {
             // Skip malformed payloads.
           }
         }
-        if (rows.length) {
-          const ids = rows.map((row) => row.id);
-          const placeholders = ids.map(() => "?").join(",");
-          run(`DELETE FROM signals WHERE id IN (${placeholders})`, ids, true);
+        if (idsToDelete.length) {
+          const placeholders = idsToDelete.map(() => "?").join(",");
+          run(`DELETE FROM signals WHERE id IN (${placeholders})`, idsToDelete, true);
         }
         sendJson(res, 200, { signals });
         return;
