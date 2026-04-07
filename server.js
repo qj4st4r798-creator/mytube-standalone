@@ -419,7 +419,7 @@ if (req.method === "GET" && url.pathname === "/api/admin/reports") {
     });
     return;
 }
-
+{
 // 404 fallback
 sendJson(res, 404, { error: "Not found." });
 } // <-- THIS closes handleApi() properly
