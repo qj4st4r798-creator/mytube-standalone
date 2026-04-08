@@ -37,6 +37,9 @@ const runtime = {
   viewerPoll: null,
   viewerVideoId: "",
   viewerPeerId: "",
+  viewerAudioContext: null,
+  viewerAudioSource: null,
+  viewerAudioGain: null,
   liveChatSource: null,
   liveChatVideoId: "",
   liveViewerPoller: null,
@@ -596,7 +599,7 @@ async function startLiveBroadcast(videoId) {
     pushLiveFrame(videoId).catch((error) => {
       console.error("Live frame push error:", error);
     });
-  }, 120);
+  }, 90);
 
   runtime.liveSignalTimer = setInterval(async () => {
     try {
@@ -754,8 +757,16 @@ async function enableCamera() {
     }
 
     runtime.cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true,
+      video: {
+        width: { ideal: 960, max: 1280 },
+        height: { ideal: 540, max: 720 },
+        frameRate: { ideal: 24, max: 30 },
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
     });
     runtime.captureVideo = document.createElement("video");
     runtime.captureVideo.autoplay = true;
@@ -968,11 +979,14 @@ async function pushLiveFrame(videoId) {
   if (!source || !runtime.cameraStream || runtime.liveFrameUploadInFlight) return;
 
   const canvas = document.createElement("canvas");
-  canvas.width = source.videoWidth || 1280;
-  canvas.height = source.videoHeight || 720;
+  const sourceWidth = source.videoWidth || 960;
+  const sourceHeight = source.videoHeight || 540;
+  const scale = Math.min(1, 960 / sourceWidth);
+  canvas.width = Math.max(480, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(270, Math.round(sourceHeight * scale));
   const context = canvas.getContext("2d");
   context.drawImage(source, 0, 0, canvas.width, canvas.height);
-  const frame = canvas.toDataURL("image/webp", 0.5);
+  const frame = canvas.toDataURL("image/webp", 0.62);
   runtime.liveFrameUploadInFlight = true;
   try {
     state.liveFrameByVideo[videoId] = frame;
@@ -1005,6 +1019,8 @@ async function startLiveViewer(videoId) {
   pc.ontrack = (event) => {
     if (!audioEl) return;
     audioEl.srcObject = event.streams[0];
+    audioEl.volume = 1;
+    connectLiveAudioStream(audioEl, event.streams[0]);
     audioEl.play().catch(() => {});
   };
 
@@ -1068,6 +1084,7 @@ function stopLiveViewer() {
     runtime.viewerPC.close();
     runtime.viewerPC = null;
   }
+  disconnectLiveAudioStream();
   runtime.viewerVideoId = "";
   runtime.viewerPeerId = "";
   const audioEl = document.getElementById("live-audio");
@@ -1114,6 +1131,46 @@ function cryptoRandomId() {
     return window.crypto.randomUUID();
   }
   return `peer_${Math.random().toString(16).slice(2)}_${Date.now()}`;
+}
+
+function connectLiveAudioStream(audioEl, stream) {
+  disconnectLiveAudioStream();
+  if (!stream) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    const context = new AudioContextClass();
+    const source = context.createMediaStreamSource(stream);
+    const gain = context.createGain();
+    gain.gain.value = 1.9;
+    source.connect(gain);
+    gain.connect(context.destination);
+    runtime.viewerAudioContext = context;
+    runtime.viewerAudioSource = source;
+    runtime.viewerAudioGain = gain;
+    if (context.state === "suspended") {
+      context.resume().catch(() => {});
+    }
+    audioEl.muted = true;
+  } catch (error) {
+    console.error("Audio boost setup failed:", error);
+    audioEl.muted = false;
+  }
+}
+
+function disconnectLiveAudioStream() {
+  if (runtime.viewerAudioSource) {
+    runtime.viewerAudioSource.disconnect();
+    runtime.viewerAudioSource = null;
+  }
+  if (runtime.viewerAudioGain) {
+    runtime.viewerAudioGain.disconnect();
+    runtime.viewerAudioGain = null;
+  }
+  if (runtime.viewerAudioContext) {
+    runtime.viewerAudioContext.close().catch(() => {});
+    runtime.viewerAudioContext = null;
+  }
 }
 
 
