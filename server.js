@@ -13,9 +13,14 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 60 * 24 
 const MAX_JSON_BYTES = Number(process.env.MAX_REQUEST_BYTES || 1024 * 1024 * 10);
 const ROOT = __dirname;
 const ABS_ROOT = path.resolve(ROOT);
-const UPLOADS_DIR = path.join(ROOT, "uploads");
+const STORAGE_ROOT = path.resolve(process.env.STORAGE_ROOT || ROOT);
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ? path.resolve(process.env.UPLOADS_DIR)
+  : path.join(STORAGE_ROOT, "uploads");
 const ABS_UPLOADS = path.resolve(UPLOADS_DIR);
-const DATA_DIR = path.join(ROOT, "data");
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(STORAGE_ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "mytube.sqlite");
 const LEGACY_USERS_FILE = path.join(DATA_DIR, "users.json");
 const LEGACY_VIDEOS_FILE = path.join(DATA_DIR, "videos.json");
@@ -62,6 +67,17 @@ function ensureDirectories() {
   if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
+function logStorageConfiguration() {
+  console.log(`[storage] root=${STORAGE_ROOT}`);
+  console.log(`[storage] data=${DATA_DIR}`);
+  console.log(`[storage] uploads=${UPLOADS_DIR}`);
+  if (process.env.RENDER && STORAGE_ROOT === ABS_ROOT) {
+    console.warn(
+      "[storage] Render is using the app directory for storage. Uploads and SQLite will be lost on deploy unless you set STORAGE_ROOT, DATA_DIR, or UPLOADS_DIR to a persistent disk mount path."
+    );
+  }
+}
+
 let db;
 
 bootstrap().catch(err => {
@@ -71,6 +87,7 @@ bootstrap().catch(err => {
 
 async function bootstrap() {
   ensureDirectories();
+  logStorageConfiguration();
   const SQL = await initSqlJs({
     locateFile: f => path.join(path.dirname(require.resolve("sql.js/dist/sql-wasm.js")), f),
   });
