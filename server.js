@@ -1131,6 +1131,12 @@ function ensureAdminUsers() {
       fullName: "Jordan Admin",
       channel: "jjordan4084",
     },
+    {
+      email: "Suckysuckyhair_dev@mytube.co",
+      password: "Dingleberry",
+      fullName: "Suckysuckyhair Dev",
+      channel: "suckysuckyhair-dev",
+    },
   ];
 
   for (const admin of admins) {
