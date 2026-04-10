@@ -1186,16 +1186,16 @@ function renderPublicPage() {
   if (state.route.name === "signup") {
     return renderAuthLayout({
       title: "Create your MyTube account",
-      subtitle: "Standalone auth is now built into this version.",
+      subtitle: "Welcome to MyTube! Let's start by creating your account.",
       form: `
         <form data-signup-form class="space-y-4">
           <div>
             <label class="text-sm font-medium">Full name</label>
-            <input class="${inputClass()}" name="full_name" placeholder="Sebastian Jordan" required />
+            <input class="${inputClass()}" name="full_name" placeholder="John Doe" required />
           </div>
           <div>
             <label class="text-sm font-medium">Channel name</label>
-            <input class="${inputClass()}" name="channel_name" placeholder="sebastianjordan" />
+            <input class="${inputClass()}" name="channel_name" placeholder="John Doe's Channel" />
           </div>
           <div>
             <label class="text-sm font-medium">Email</label>
@@ -2017,15 +2017,15 @@ function renderAuthLayout({ title, subtitle, form }) {
                 ${iconShield("h-4 w-4 text-primary")}
                 Local Authentication
               </div>
-              <h1 class="mt-6 text-4xl font-bold">MyTube Standalone</h1>
+              <h1 class="mt-6 text-4xl font-bold">Welcome to MyTube!</h1>
               <p class="mt-4 text-base text-muted-foreground max-w-md">
-                All the main pages now run against your own local backend instead of Base44.
+                Create an account or sign in to start uploading and watching videos on your own private MyTube instance. Your data is stored locally and never shared with any third parties or teachers 😏😏😏.
               </p>
             </div>
             <div class="space-y-4">
-              ${featureRow("Working pages", "Home, watch, search, uploads, live, channel views, likes, history, and subscriptions.")}
-              ${featureRow("Admin moderation", "Admins can review reports and delete inappropriate videos.")}
-              ${featureRow("Your accounts", "Your user account and admin account are both available from this screen.")}
+              ${featureRow("Best place to watch videos in school", "Since MyTube runs entirely on your local network, you can access it even if securly blocks popular other video platforms.")}
+              ${featureRow("Upload your own videos", "Share videos with your friends or classmates by uploading them to your MyTube Channel.")}
+              ${featureRow("Manage your accounts", "Create multiple user accounts for different people using the same MyTube instance, or just to have a separate account for school and personal use.")}
             </div>
           </div>
           <div class="p-6 md:p-10">

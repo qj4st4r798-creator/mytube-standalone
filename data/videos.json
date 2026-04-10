@@ -1,22 +1,5 @@
 [
   {
-    "id": "video_9495c4fa-74eb-4a52-b7ee-f0a48563409a",
-    "title": "Hello World",
-    "description": "Hello World",
-    "thumbnail_url": "/uploads/00c7a119-b6bc-4674-81a8-d5402d34ab14.png",
-    "video_url": "/uploads/0571bb04-0757-4dae-924e-e261680f7f9f.mov",
-    "current_frame_url": "",
-    "channel_name": "MyTube",
-    "owner_id": "user_sjordan",
-    "category": "general",
-    "tags": [],
-    "views": 0,
-    "duration": "3:24",
-    "is_live": false,
-    "is_music": false,
-    "created_at": "2026-04-10T01:07:44.101Z"
-  },
-  {
     "id": "video_6c0bdf967de1e2cf",
     "title": "POV when you stub your toe",
     "description": "This is a video of jacob's sister stubbing her toe",
