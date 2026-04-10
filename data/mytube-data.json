@@ -1,0 +1,119 @@
+{
+  "users": [
+    {
+      "id": "user_sjordan",
+      "email": "sjordan4076@mytube.co",
+      "full_name": "Sebastian Jordan",
+      "channel_name": "MyTube",
+      "role": "admin",
+      "password_hash": "c12312e26cc571af0cb69df167e0012c9512730f65d5ed4520b928c922848c3e",
+      "password_salt": "e27467bdc64c888b38d2b6e197b3a22b",
+      "created_at": "2026-04-05T19:00:00.000Z"
+    },
+    {
+      "id": "user_jjordan_admin",
+      "email": "jjordan4084@mytube.co",
+      "full_name": " Jacob Jordan",
+      "channel_name": "Dev-1",
+      "role": "admin",
+      "password_hash": "d30241d5ed1468b149cad3de190ffe7fd3d3da362fc09ec2ae5aa92b43e398ce",
+      "password_salt": "25a593d16150e78c884b87eb05b12906",
+      "created_at": "2026-04-05T19:00:00.000Z"
+    },
+    {
+      "id": "user_535e25b661c99b68",
+      "email": "newuser1775418608@mytube.co",
+      "full_name": "New User",
+      "channel_name": "new-user",
+      "role": "user",
+      "password_hash": "8c7a6779233a13f47576362bb771d54448c607369d3842112407feedfbd5082c0b1cb394ce81c7c5113de1adb303a5bd1c065a79221775588190f10d14a81902",
+      "password_salt": "ec41e19636d9d85521539162908a8ef2",
+      "created_at": "2026-04-05T19:50:08.527Z"
+    },
+    {
+      "id": "user_suckysuckyhair_dev",
+      "email": "Suckysuckyhair_dev@mytube.co",
+      "full_name": "Suckysuckyhair Dev",
+      "channel_name": "suckysuckyhair-dev",
+      "role": "admin",
+      "password_hash": "652dbdf46e9cba4df15e0902fd271933134deea1d05632f311c8f437b93d4257",
+      "password_salt": "d32a8a3fbd2e7532504558677f244b01",
+      "created_at": "2026-04-08T12:00:00.000Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session_3b386db2-ab45-4981-800b-9d8833cde3d3",
+      "user_id": "user_sjordan",
+      "token_hash": "67eecba7835afa752ef00ff972511a431d5b2c677b65fa70f61399718f9d3e70",
+      "expires_at": "2026-04-17T14:36:39.927Z",
+      "created_at": "2026-04-10T14:36:39.927Z"
+    }
+  ],
+  "videos": [
+    {
+      "id": "video_6c0bdf967de1e2cf",
+      "title": "POV when you stub your toe",
+      "description": "This is a video of jacob's sister stubbing her toe",
+      "thumbnail_url": "/uploads/thumbnail_file-1775435018320-59df770119b2.webp",
+      "video_url": "/uploads/video_file-1775435018326-771babe6a6a1.mp4",
+      "current_frame_url": "",
+      "channel_name": "MyTube",
+      "owner_id": "user_sjordan",
+      "category": "entertainment",
+      "tags_json": "[\"Toestubb\",\"pain\",\"nopainnogain\"]",
+      "views": 1,
+      "duration": "0:08",
+      "is_live": false,
+      "is_music": false,
+      "created_at": "2026-04-06T00:23:38.331Z"
+    },
+    {
+      "id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
+      "title": "CNN 10 Friday Recap Sound (Free Download!!!)",
+      "description": "Free cnn10 music",
+      "thumbnail_url": "/uploads/f536d961-e203-4fb3-85d2-63f1acd3c0bf.png",
+      "video_url": "/uploads/5e064fb1-4560-486e-a748-ed30c8b61478.mp3",
+      "current_frame_url": "",
+      "channel_name": "MyTube",
+      "owner_id": "user_sjordan",
+      "category": "music",
+      "tags_json": "[\"coywire\",\"atlanta\",\"cnn10 project\",\"social studies class\"]",
+      "views": 1,
+      "duration": "1:07",
+      "is_live": false,
+      "is_music": true,
+      "created_at": "2026-04-10T14:38:55.960Z"
+    }
+  ],
+  "likes": [
+    {
+      "user_id": "user_sjordan",
+      "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
+      "created_at": "2026-04-10T14:39:03.541Z"
+    }
+  ],
+  "history": [
+    {
+      "user_id": "user_sjordan",
+      "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
+      "viewed_at": "2026-04-10T14:38:55.971Z"
+    }
+  ],
+  "reports": [],
+  "subscriptions": [],
+  "signals": [],
+  "comments": [],
+  "live_chat_messages": [],
+  "stocks": [
+    {
+      "symbol": "mytube.co",
+      "display_name": "mytube.co",
+      "price": 198.94,
+      "change": 7.72,
+      "change_percent": 4.04,
+      "updated_at": "2026-04-10T14:55:30.689Z",
+      "trend_mode": "fast_growth"
+    }
+  ]
+}
