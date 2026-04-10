@@ -6,7 +6,6 @@ const crypto = require("crypto");
 const { URL } = require("url");
 const Busboy = require("busboy");
 const cookie = require("cookie");
-const initSqlJs = require("sql.js");
 
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
@@ -21,14 +20,25 @@ const ABS_UPLOADS = path.resolve(UPLOADS_DIR);
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(STORAGE_ROOT, "data");
-const DB_FILE = path.join(DATA_DIR, "mytube.sqlite");
+const DATA_FILE = path.join(DATA_DIR, "mytube-data.json");
+const SQLITE_EXPORT_FILE = path.join(DATA_DIR, "sqlite-json", "all-tables.json");
 const LEGACY_USERS_FILE = path.join(DATA_DIR, "users.json");
 const LEGACY_VIDEOS_FILE = path.join(DATA_DIR, "videos.json");
 const SESSION_COOKIE = "mytube_session";
-const STOCK_SYMBOLS = ["AAPL.US","MSFT.US","NVDA.US","TSLA.US","AMZN.US","GOOG.US","META.US","SPY.US"];
+const STOCK_SYMBOLS = ["AAPL","MSFT","NVDA","TSLA","AMZN","GOOG","META","SPY"];
+const STOCK_FALLBACKS = [
+  { symbol: "AAPL", shortName: "Apple", price: 212.4, change: 1.82, changePercent: 0.86, marketState: "CACHED" },
+  { symbol: "MSFT", shortName: "Microsoft", price: 428.15, change: 2.11, changePercent: 0.5, marketState: "CACHED" },
+  { symbol: "NVDA", shortName: "NVIDIA", price: 118.72, change: -1.24, changePercent: -1.03, marketState: "CACHED" },
+  { symbol: "TSLA", shortName: "Tesla", price: 171.34, change: -3.92, changePercent: -2.24, marketState: "CACHED" },
+  { symbol: "AMZN", shortName: "Amazon", price: 186.09, change: 0.94, changePercent: 0.51, marketState: "CACHED" },
+  { symbol: "GOOG", shortName: "Alphabet", price: 162.27, change: 0.72, changePercent: 0.45, marketState: "CACHED" },
+  { symbol: "META", shortName: "Meta", price: 503.88, change: 4.17, changePercent: 0.83, marketState: "CACHED" },
+  { symbol: "SPY", shortName: "SPDR S&P 500 ETF", price: 512.66, change: 1.4, changePercent: 0.27, marketState: "CACHED" },
+];
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 1024 * 1024 * 512);
 const ALLOWED_IMAGE_TYPES = new Set(["image/png","image/jpeg","image/webp","image/gif"]);
-const ALLOWED_VIDEO_TYPES = new Set(["video/mp4","video/webm","video/quicktime"]);
+const ALLOWED_VIDEO_TYPES = new Set(["video/mp4","video/webm","video/quicktime","audio/mpeg","audio/mp3"]);
 const AUTH_WINDOW_MS = 1000 * 60 * 15;
 const MAX_LOGIN_ATTEMPTS = 10;
 const MAX_SIGNUP_ATTEMPTS = 5;
@@ -45,6 +55,8 @@ const MIME_TYPES = {
   ".webp": "image/webp",
   ".mp4": "video/mp4",
   ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg",
   ".ico": "image/x-icon",
 };
 
@@ -61,7 +73,6 @@ const authLimiter = new Map();
 const liveChatStreams = new Map();
 const viewerCounts = new Map();
 const MAX_CHAT_STREAM_HISTORY = 200;
-let sessionColumnsCache = null;
 function ensureDirectories() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -73,7 +84,7 @@ function logStorageConfiguration() {
   console.log(`[storage] uploads=${UPLOADS_DIR}`);
   if (process.env.RENDER && STORAGE_ROOT === ABS_ROOT) {
     console.warn(
-      "[storage] Render is using the app directory for storage. Uploads and SQLite will be lost on deploy unless you set STORAGE_ROOT, DATA_DIR, or UPLOADS_DIR to a persistent disk mount path."
+      "[storage] Render is using the app directory for storage. Uploads and JSON data will be lost on deploy unless you set STORAGE_ROOT, DATA_DIR, or UPLOADS_DIR to a persistent disk mount path."
     );
   }
 }
@@ -88,21 +99,13 @@ bootstrap().catch(err => {
 async function bootstrap() {
   ensureDirectories();
   logStorageConfiguration();
-  const SQL = await initSqlJs({
-    locateFile: f => path.join(path.dirname(require.resolve("sql.js/dist/sql-wasm.js")), f),
-  });
-
-  db = fs.existsSync(DB_FILE)
-    ? new SQL.Database(fs.readFileSync(DB_FILE))
-    : new SQL.Database();
-
-  initDb();
+  db = loadDataStore();
   ensureDefaultStocks();
   migrateLegacyJsonData();
-  persistLegacyUsers();
-  persistLegacyVideos();
   ensureAdminUsers();
   clearExpiredSessions();
+  persistLegacyUsers();
+  persistLegacyVideos();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -116,6 +119,10 @@ async function bootstrap() {
     } catch (err) {
       if (err.message === "Request body too large.") {
         sendJson(res, 413, { error: "Upload is too large." });
+        return;
+      }
+      if (err.message === "Unsupported media format." || err.message === "Unsupported thumbnail format.") {
+        sendJson(res, 400, { error: err.message });
         return;
       }
       if (err.message === "Origin mismatch.") {
@@ -143,7 +150,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 429, { error: "Too many login attempts." });
       return;
     }
-    const user = get("SELECT * FROM users WHERE lower(email)=lower(?)", [String(body.email||"").trim()]);
+    const user = findUserByEmail(String(body.email || "").trim());
     if (!user || !verifyPassword(user, String(body.password||""))) {
       sendJson(res, 401, { error: "Invalid email or password." });
       return;
@@ -156,7 +163,10 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/logout") {
     const session = getSession(req);
-    if (session) run("DELETE FROM sessions WHERE id = ?", [session.id], true);
+    if (session) {
+      db.sessions = db.sessions.filter((entry) => entry.id !== session.id);
+      persistDataStore();
+    }
     sendJson(res, 200, { ok: true }, [setCookieHeader(clearSessionCookie())]);
     return;
   }
@@ -184,7 +194,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: "Invalid email." });
       return;
     }
-    if (get("SELECT id FROM users WHERE lower(email)=lower(?)", [email])) {
+    if (findUserByEmail(email)) {
       sendJson(res, 409, { error: "Email already exists." });
       return;
     }
@@ -192,11 +202,17 @@ async function handleApi(req, res, url) {
     const userId = createId("user");
     const pass = createPasswordHash(password);
 
-    run(
-      "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?, 'user',?,?,?)",
-      [userId, email, fullName, channelName, pass.hash, pass.salt, new Date().toISOString()],
-      true
-    );
+    db.users.push({
+      id: userId,
+      email,
+      full_name: fullName,
+      channel_name: channelName,
+      role: "user",
+      password_hash: pass.hash,
+      password_salt: pass.salt,
+      created_at: new Date().toISOString(),
+    });
+    persistDataStore();
 
     persistLegacyUsers();
 
@@ -259,29 +275,24 @@ async function handleApi(req, res, url) {
 
     const videoId = createId("video");
 
-    run(
-      `INSERT INTO videos (
-        id, title, description, thumbnail_url, video_url, current_frame_url,
-        channel_name, owner_id, category, tags_json, views, duration,
-        is_live, is_music, created_at
-      ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-      [
-        videoId,
-        title,
-        String(fields.description || "").trim(),
-        files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
-        files.video_file ? `/uploads/${files.video_file.fileName}` : "",
-        user.channel_name,
-        user.id,
-        String(fields.category || "general").trim() || "general",
-        JSON.stringify(parseTags(fields.tags)),
-        String(fields.duration || "0:00").trim() || "0:00",
-        isLive ? 1 : 0,
-        toBoolean(fields.is_music) ? 1 : 0,
-        new Date().toISOString()
-      ],
-      true
-    );
+    db.videos.push({
+      id: videoId,
+      title,
+      description: String(fields.description || "").trim(),
+      thumbnail_url: files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
+      video_url: files.video_file ? `/uploads/${files.video_file.fileName}` : "",
+      current_frame_url: "",
+      channel_name: user.channel_name,
+      owner_id: user.id,
+      category: String(fields.category || "general").trim() || "general",
+      tags_json: JSON.stringify(parseTags(fields.tags)),
+      views: 0,
+      duration: String(fields.duration || "0:00").trim() || "0:00",
+      is_live: isLive,
+      is_music: toBoolean(fields.is_music),
+      created_at: new Date().toISOString(),
+    });
+    persistDataStore();
 
     persistLegacyVideos();
     sendJson(res, 201, { video: getVideoById(videoId) });
@@ -379,10 +390,7 @@ async function handleApi(req, res, url) {
       if (req.method === "DELETE" && parts[4]) {
         const user = requireUser(req, res);
         if (!user) return;
-        const comment = get(
-          "SELECT user_id FROM comments WHERE id = ? AND video_id = ?",
-          [parts[4], videoId]
-        );
+        const comment = db.comments.find((entry) => entry.id === parts[4] && entry.video_id === videoId) || null;
         if (!comment) {
           sendJson(res, 404, { error: "Comment not found." });
           return;
@@ -415,13 +423,14 @@ async function handleApi(req, res, url) {
       fs.rm(thumbPath, { force: true }, () => {});
       fs.rm(videoPath, { force: true }, () => {});
 
-      run("DELETE FROM likes WHERE video_id = ?", [videoId]);
-      run("DELETE FROM history WHERE video_id = ?", [videoId]);
-      run("DELETE FROM reports WHERE video_id = ?", [videoId]);
-      run("DELETE FROM comments WHERE video_id = ?", [videoId]);
-      run("DELETE FROM live_chat_messages WHERE video_id = ?", [videoId]);
-      run("DELETE FROM signals WHERE video_id = ?", [videoId]);
-      run("DELETE FROM videos WHERE id = ?", [videoId], true);
+      db.likes = db.likes.filter((entry) => entry.video_id !== videoId);
+      db.history = db.history.filter((entry) => entry.video_id !== videoId);
+      db.reports = db.reports.filter((entry) => entry.video_id !== videoId);
+      db.comments = db.comments.filter((entry) => entry.video_id !== videoId);
+      db.live_chat_messages = db.live_chat_messages.filter((entry) => entry.video_id !== videoId);
+      db.signals = db.signals.filter((entry) => entry.video_id !== videoId);
+      db.videos = db.videos.filter((entry) => entry.id !== videoId);
+      persistDataStore();
       persistLegacyVideos();
       liveChatStreams.delete(videoId);
       viewerCounts.delete(videoId);
@@ -466,11 +475,14 @@ async function handleApi(req, res, url) {
         }
 
         const source = body.source === "viewer" ? "viewer" : "broadcaster";
-        run(
-          "INSERT INTO signals (id, video_id, payload, created_at, source) VALUES (?, ?, ?, ?, ?)",
-          [crypto.randomUUID(), videoId, JSON.stringify(payload), new Date().toISOString(), source],
-          true
-        );
+        db.signals.push({
+          id: crypto.randomUUID(),
+          video_id: videoId,
+          payload: JSON.stringify(payload),
+          created_at: new Date().toISOString(),
+          source,
+        });
+        persistDataStore();
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -479,10 +491,9 @@ async function handleApi(req, res, url) {
         const role = String(url.searchParams.get("for") || "viewer").toLowerCase();
         const desiredSource = role === "broadcaster" ? "viewer" : "broadcaster";
         const peerId = String(url.searchParams.get("peer_id") || "").trim();
-        const rows = all(
-          "SELECT id, payload FROM signals WHERE video_id = ? AND source = ? ORDER BY created_at ASC",
-          [videoId, desiredSource]
-        );
+        const rows = db.signals
+          .filter((row) => row.video_id === videoId && row.source === desiredSource)
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
         const signals = [];
         const idsToDelete = [];
         for (const row of rows) {
@@ -501,8 +512,8 @@ async function handleApi(req, res, url) {
           }
         }
         if (idsToDelete.length) {
-          const placeholders = idsToDelete.map(() => "?").join(",");
-          run(`DELETE FROM signals WHERE id IN (${placeholders})`, idsToDelete, true);
+          db.signals = db.signals.filter((row) => !idsToDelete.includes(row.id));
+          persistDataStore();
         }
         sendJson(res, 200, { signals });
         return;
@@ -516,19 +527,17 @@ async function handleApi(req, res, url) {
         sendJson(res, 404, { error: "Video not found." });
         return;
       }
-      const existing = get(
-        "SELECT 1 AS ok FROM likes WHERE user_id = ? AND video_id = ?",
-        [user.id, videoId]
-      );
+      const existing = db.likes.find((row) => row.user_id === user.id && row.video_id === videoId);
       if (existing) {
-        run("DELETE FROM likes WHERE user_id = ? AND video_id = ?", [user.id, videoId], true);
+        db.likes = db.likes.filter((row) => !(row.user_id === user.id && row.video_id === videoId));
       } else {
-        run(
-          "INSERT INTO likes (user_id, video_id, created_at) VALUES (?, ?, ?)",
-          [user.id, videoId, new Date().toISOString()],
-          true
-        );
+        db.likes.push({
+          user_id: user.id,
+          video_id: videoId,
+          created_at: new Date().toISOString(),
+        });
       }
+      persistDataStore();
       sendJson(res, 200, { liked: !existing });
       return;
     }
@@ -540,13 +549,15 @@ async function handleApi(req, res, url) {
         sendJson(res, 404, { error: "Video not found." });
         return;
       }
-      run("UPDATE videos SET views = views + 1 WHERE id = ?", [videoId]);
-      run("DELETE FROM history WHERE user_id = ? AND video_id = ?", [user.id, videoId]);
-      run(
-        "INSERT INTO history (user_id, video_id, viewed_at) VALUES (?, ?, ?)",
-        [user.id, videoId, new Date().toISOString()],
-        true
-      );
+      const currentVideo = getVideoRow(videoId);
+      currentVideo.views = Number(currentVideo.views || 0) + 1;
+      db.history = db.history.filter((entry) => !(entry.user_id === user.id && entry.video_id === videoId));
+      db.history.push({
+        user_id: user.id,
+        video_id: videoId,
+        viewed_at: new Date().toISOString(),
+      });
+      persistDataStore();
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -559,23 +570,17 @@ async function handleApi(req, res, url) {
         return;
       }
       const body = await readJson(req);
-      const existing = get(
-        "SELECT 1 AS ok FROM reports WHERE user_id = ? AND video_id = ?",
-        [user.id, videoId]
-      );
+      const existing = db.reports.find((row) => row.user_id === user.id && row.video_id === videoId);
       if (!existing) {
-        run(
-          "INSERT INTO reports (id, video_id, user_id, email, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-          [
-            createId("report"),
-            videoId,
-            user.id,
-            user.email,
-            String(body.reason || "Inappropriate content").trim(),
-            new Date().toISOString()
-          ],
-          true
-        );
+        db.reports.push({
+          id: createId("report"),
+          video_id: videoId,
+          user_id: user.id,
+          email: user.email,
+          reason: String(body.reason || "Inappropriate content").trim(),
+          created_at: new Date().toISOString(),
+        });
+        persistDataStore();
       }
       sendJson(res, 200, { ok: true });
       return;
@@ -595,11 +600,11 @@ async function handleApi(req, res, url) {
       }
       const body = await readJson(req);
       const frame = String(body.current_frame_url || "").trim();
-      run(
-        "UPDATE videos SET current_frame_url = ?, thumbnail_url = CASE WHEN thumbnail_url = '' THEN ? ELSE thumbnail_url END WHERE id = ?",
-        [frame, frame, videoId],
-        true
-      );
+      video.current_frame_url = frame;
+      if (!video.thumbnail_url) {
+        video.thumbnail_url = frame;
+      }
+      persistDataStore();
       persistLegacyVideos();
       broadcastToLiveChat(videoId, "frame", { videoId, frame });
       sendJson(res, 200, { ok: true });
@@ -618,8 +623,9 @@ async function handleApi(req, res, url) {
         sendJson(res, 403, { error: "You cannot stop this stream." });
         return;
       }
-      run("UPDATE videos SET is_live = 0 WHERE id = ?", [videoId], true);
-      run("DELETE FROM signals WHERE video_id = ?", [videoId], true);
+      video.is_live = false;
+      db.signals = db.signals.filter((entry) => entry.video_id !== videoId);
+      persistDataStore();
       persistLegacyVideos();
       sendJson(res, 200, { ok: true });
       return;
@@ -635,26 +641,21 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const existing = get(
-      "SELECT 1 FROM subscriptions WHERE user_id = ? AND channel_name = ?",
-      [user.id, channelName]
-    );
+    const existing = db.subscriptions.find((entry) => entry.user_id === user.id && entry.channel_name === channelName);
 
     if (existing) {
-      run(
-        "DELETE FROM subscriptions WHERE user_id = ? AND channel_name = ?",
-        [user.id, channelName],
-        true
-      );
+      db.subscriptions = db.subscriptions.filter((entry) => !(entry.user_id === user.id && entry.channel_name === channelName));
+      persistDataStore();
       sendJson(res, 200, { subscribed: false });
       return;
     }
 
-    run(
-      "INSERT INTO subscriptions (user_id, channel_name, created_at) VALUES (?, ?, ?)",
-      [user.id, channelName, new Date().toISOString()],
-      true
-    );
+    db.subscriptions.push({
+      user_id: user.id,
+      channel_name: channelName,
+      created_at: new Date().toISOString(),
+    });
+    persistDataStore();
 
     sendJson(res, 200, { subscribed: true });
     return;
@@ -687,11 +688,12 @@ async function handleApi(req, res, url) {
     const price = Number(body.price);
     const change = Number(body.change);
     const changePercent = Number(body.changePercent ?? body.change_percent ?? 0);
+    const trendMode = normalizeTrendMode(body.trendMode ?? body.trend_mode);
     if (Number.isNaN(price) || Number.isNaN(change) || Number.isNaN(changePercent)) {
       sendJson(res, 400, { error: "Invalid stock values." });
       return;
     }
-    updateMyTubeStock({ price, change, changePercent });
+    updateMyTubeStock({ price, change, changePercent, trendMode });
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -727,6 +729,18 @@ function parseMultipart(req) {
 
     busboy.on("file", (name, file, info) => {
       const { filename, mimeType } = info;
+      const extension = path.extname(filename || "").toLowerCase();
+      const isThumbnail = name === "thumbnail_file";
+      const isMedia = name === "video_file";
+      const mediaLooksValid = isMedia && (ALLOWED_VIDEO_TYPES.has(mimeType) || [".mp4", ".webm", ".mov", ".mp3"].includes(extension));
+      const imageLooksValid = isThumbnail && (ALLOWED_IMAGE_TYPES.has(mimeType) || [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension));
+
+      if ((isThumbnail && !imageLooksValid) || (isMedia && !mediaLooksValid)) {
+        file.resume();
+        reject(new Error(isThumbnail ? "Unsupported thumbnail format." : "Unsupported media format."));
+        return;
+      }
+
       const safeName = crypto.randomUUID() + path.extname(filename);
       const savePath = path.join(UPLOADS_DIR, safeName);
 
@@ -760,7 +774,7 @@ function requireUser(req, res) {
     sendJson(res, 401, { error: "Not authenticated." });
     return null;
   }
-  const user = get("SELECT * FROM users WHERE id = ?", [session.user_id]);
+  const user = findUserById(session.user_id);
   if (!user) {
     sendJson(res, 401, { error: "Invalid session." });
     return null;
@@ -769,26 +783,7 @@ function requireUser(req, res) {
 }
 
 function publicUser(userId) {
-  const user = get(
-    "SELECT id,email,full_name,channel_name,role,created_at FROM users WHERE id = ?",
-    [userId]
-  );
-  if (!user) return null;
-
-  const liked = all("SELECT video_id FROM likes WHERE user_id = ?", [userId]).map((row) => row.video_id);
-  const history = all("SELECT video_id FROM history WHERE user_id = ? ORDER BY viewed_at DESC", [userId]).map(
-    (row) => row.video_id
-  );
-  const subscriptions = all("SELECT channel_name FROM subscriptions WHERE user_id = ?", [userId]).map(
-    (row) => row.channel_name
-  );
-
-  return {
-    ...user,
-    liked_video_ids: liked,
-    history_video_ids: history,
-    subscribed_channels: subscriptions,
-  };
+  return publicUserFields(findUserById(userId));
 }
 
 function getSession(req) {
@@ -796,15 +791,13 @@ function getSession(req) {
   const token = cookies[SESSION_COOKIE];
   if (!token) return null;
 
-  const sessionConfig = getSessionConfig();
-  const lookupField = sessionConfig.hasTokenHash ? "token_hash" : "id";
-  const lookupValue = sessionConfig.hasTokenHash ? hashSessionToken(token) : token;
-  const session = get(`SELECT * FROM sessions WHERE ${lookupField} = ?`, [lookupValue]);
+  const session = findSessionByToken(token);
   if (!session) return null;
 
   const expires = sessionExpiresAt(session.expires_at);
   if (Date.now() > expires) {
-    run("DELETE FROM sessions WHERE id = ?", [session.id], true);
+    db.sessions = db.sessions.filter((entry) => entry.id !== session.id);
+    persistDataStore();
     return null;
   }
 
@@ -812,26 +805,15 @@ function getSession(req) {
 }
 
 function createSession(userId) {
-  const sessionConfig = getSessionConfig();
   const token = crypto.randomUUID();
-  const rowId = sessionConfig.hasTokenHash ? createId("session") : token;
-  const expires = sessionConfig.expiresAsInteger
-    ? Date.now() + SESSION_TTL_MS
-    : new Date(Date.now() + SESSION_TTL_MS).toISOString();
-
-  if (sessionConfig.hasTokenHash) {
-    run(
-      "INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
-      [rowId, userId, hashSessionToken(token), expires, new Date().toISOString()],
-      true
-    );
-  } else {
-    run(
-      "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
-      [rowId, userId, expires],
-      true
-    );
-  }
+  db.sessions.push({
+    id: createId("session"),
+    user_id: userId,
+    token_hash: hashSessionToken(token),
+    expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+    created_at: new Date().toISOString(),
+  });
+  persistDataStore();
 
   return token;
 }
@@ -926,18 +908,6 @@ function clearRateLimit(key) {
   authLimiter.delete(key);
 }
 
-function getSessionConfig() {
-  if (sessionColumnsCache) return sessionColumnsCache;
-  const columns = all("PRAGMA table_info(sessions)");
-  const names = new Set(columns.map((column) => String(column.name || "")));
-  const expiresColumn = columns.find((column) => column.name === "expires_at");
-  sessionColumnsCache = {
-    hasTokenHash: names.has("token_hash"),
-    expiresAsInteger: expiresColumn ? String(expiresColumn.type || "").toUpperCase().includes("INT") : false,
-  };
-  return sessionColumnsCache;
-}
-
 function hashSessionToken(token) {
   return crypto.createHash("sha256").update(String(token)).digest("hex");
 }
@@ -952,173 +922,288 @@ function sessionExpiresAt(value) {
 function toBoolean(v) {
   return v === "1" || v === "true" || v === true;
 }
-function run(sql, params = [], write = false) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  stmt.step();
-  stmt.free();
-  if (write) saveDb();
-}
-
-function get(sql, params = []) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const row = stmt.step() ? stmt.getAsObject() : null;
-  stmt.free();
-  return row;
-}
-
-function all(sql, params = []) {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const rows = [];
-  while (stmt.step()) rows.push(stmt.getAsObject());
-  stmt.free();
-  return rows;
-}
 
 function saveDb() {
-  const data = db.export();
-  fs.writeFileSync(DB_FILE, Buffer.from(data));
+  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2) + "\n");
 }
 
-function initDb() {
-  run(
-    `CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE,
-      full_name TEXT,
-      channel_name TEXT,
-      role TEXT,
-      password_hash TEXT,
-      password_salt TEXT,
-      created_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT,
-      expires_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS videos (
-      id TEXT PRIMARY KEY,
-      title TEXT,
-      description TEXT,
-      thumbnail_url TEXT,
-      video_url TEXT,
-      current_frame_url TEXT,
-      channel_name TEXT,
-      owner_id TEXT,
-      category TEXT,
-      tags_json TEXT,
-      views INTEGER,
-      duration TEXT,
-      is_live INTEGER,
-      is_music INTEGER,
-      created_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS likes (
-      user_id TEXT,
-      video_id TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS history (
-      user_id TEXT,
-      video_id TEXT,
-      viewed_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS reports (
-      id TEXT PRIMARY KEY,
-      video_id TEXT,
-      user_id TEXT,
-      email TEXT,
-      reason TEXT,
-      created_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS subscriptions (
-      user_id TEXT,
-      channel_name TEXT,
-      created_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS signals (
-      id TEXT PRIMARY KEY,
-      video_id TEXT,
-      payload TEXT,
-      created_at TEXT,
-      source TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS comments (
-      id TEXT PRIMARY KEY,
-      video_id TEXT,
-      user_id TEXT,
-      content TEXT,
-      created_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS live_chat_messages (
-      id TEXT PRIMARY KEY,
-      video_id TEXT,
-      user_id TEXT,
-      message TEXT,
-      created_at TEXT
-    )`
-  );
-
-  run(
-    `CREATE TABLE IF NOT EXISTS stocks (
-      symbol TEXT PRIMARY KEY,
-      display_name TEXT,
-      price REAL,
-      change REAL,
-      change_percent REAL,
-      updated_at TEXT
-    )`
-  );
-
-  ensureSignalSourceColumn();
+function createEmptyDataStore() {
+  return {
+    users: [],
+    sessions: [],
+    videos: [],
+    likes: [],
+    history: [],
+    reports: [],
+    subscriptions: [],
+    signals: [],
+    comments: [],
+    live_chat_messages: [],
+    stocks: [],
+  };
 }
 
-function ensureSignalSourceColumn() {
-  const columns = all("PRAGMA table_info(signals)");
-  if (!columns.some((col) => col.name === "source")) {
-    run("ALTER TABLE signals ADD COLUMN source TEXT");
+function loadDataStore() {
+  if (fs.existsSync(DATA_FILE)) {
+    return normalizeDataStore(JSON.parse(fs.readFileSync(DATA_FILE, "utf8")));
   }
-  run("UPDATE signals SET source = 'broadcaster' WHERE source IS NULL", [], true);
+  if (fs.existsSync(SQLITE_EXPORT_FILE)) {
+    console.warn(`[storage] Importing JSON datastore from ${SQLITE_EXPORT_FILE}`);
+    const imported = normalizeDataStore(JSON.parse(fs.readFileSync(SQLITE_EXPORT_FILE, "utf8")));
+    db = imported;
+    saveDb();
+    return imported;
+  }
+  const empty = normalizeDataStore(createEmptyDataStore());
+  db = empty;
+  saveDb();
+  return empty;
+}
+
+function normalizeDataStore(raw) {
+  const next = createEmptyDataStore();
+  for (const key of Object.keys(next)) {
+    next[key] = Array.isArray(raw && raw[key]) ? raw[key] : [];
+  }
+  next.users = next.users.map((user) => ({
+    id: user.id,
+    email: user.email,
+    full_name: user.full_name || "",
+    channel_name: user.channel_name || slugFromText((user.email || "").split("@")[0]),
+    role: user.role || "user",
+    password_hash: user.password_hash || "",
+    password_salt: user.password_salt || "",
+    created_at: user.created_at || new Date().toISOString(),
+  }));
+  next.sessions = next.sessions.map((session) => ({
+    id: session.id,
+    user_id: session.user_id,
+    token_hash: session.token_hash || "",
+    expires_at: session.expires_at || new Date().toISOString(),
+    created_at: session.created_at || new Date().toISOString(),
+  }));
+  next.videos = next.videos.map((video) => ({
+    id: video.id,
+    title: video.title || "",
+    description: video.description || "",
+    thumbnail_url: video.thumbnail_url || "",
+    video_url: video.video_url || "",
+    current_frame_url: video.current_frame_url || "",
+    channel_name: video.channel_name || "",
+    owner_id: video.owner_id || "",
+    category: video.category || "general",
+    tags_json: typeof video.tags_json === "string" ? video.tags_json : JSON.stringify(video.tags || []),
+    views: Number(video.views || 0),
+    duration: video.duration || "0:00",
+    is_live: Boolean(video.is_live),
+    is_music: Boolean(video.is_music),
+    created_at: video.created_at || new Date().toISOString(),
+  }));
+  next.likes = next.likes.map((like) => ({
+    user_id: like.user_id,
+    video_id: like.video_id,
+    created_at: like.created_at || new Date().toISOString(),
+  }));
+  next.history = next.history.map((entry) => ({
+    user_id: entry.user_id,
+    video_id: entry.video_id,
+    viewed_at: entry.viewed_at || new Date().toISOString(),
+  }));
+  next.reports = next.reports.map((report) => ({
+    id: report.id || createId("report"),
+    video_id: report.video_id,
+    user_id: report.user_id,
+    email: report.email || "",
+    reason: report.reason || "",
+    created_at: report.created_at || new Date().toISOString(),
+  }));
+  next.subscriptions = next.subscriptions.map((subscription) => ({
+    user_id: subscription.user_id,
+    channel_name: subscription.channel_name,
+    created_at: subscription.created_at || new Date().toISOString(),
+  }));
+  next.signals = next.signals.map((signal) => ({
+    id: signal.id || createId("signal"),
+    video_id: signal.video_id,
+    payload: typeof signal.payload === "string" ? signal.payload : JSON.stringify(signal.payload || {}),
+    created_at: signal.created_at || new Date().toISOString(),
+    source: signal.source || "broadcaster",
+  }));
+  next.comments = next.comments.map((comment) => ({
+    id: comment.id || createId("comment"),
+    video_id: comment.video_id,
+    user_id: comment.user_id,
+    content: comment.content || "",
+    created_at: comment.created_at || new Date().toISOString(),
+  }));
+  next.live_chat_messages = next.live_chat_messages.map((message) => ({
+    id: message.id || createId("lchat"),
+    video_id: message.video_id,
+    user_id: message.user_id,
+    message: message.message || "",
+    created_at: message.created_at || new Date().toISOString(),
+  }));
+  next.stocks = next.stocks.map((stock) => ({
+    symbol: stock.symbol,
+    display_name: stock.display_name || stock.symbol,
+    price: Number(stock.price || 0),
+    change: Number(stock.change || 0),
+    change_percent: Number(stock.change_percent || 0),
+    updated_at: stock.updated_at || new Date().toISOString(),
+    trend_mode: stock.trend_mode || "stable",
+  }));
+  return next;
+}
+
+function persistDataStore() {
+  saveDb();
+}
+
+function findUserByEmail(email) {
+  const lowered = String(email || "").trim().toLowerCase();
+  return db.users.find((user) => String(user.email || "").trim().toLowerCase() === lowered) || null;
+}
+
+function findUserById(userId) {
+  return db.users.find((user) => user.id === userId) || null;
+}
+
+function findVideoById(videoId) {
+  return db.videos.find((video) => video.id === videoId) || null;
+}
+
+function findSessionByToken(token) {
+  const tokenHash = hashSessionToken(token);
+  return db.sessions.find((session) => session.token_hash === tokenHash) || null;
+}
+
+function publicUserFields(user) {
+  if (!user) return null;
+  const liked = db.likes.filter((row) => row.user_id === user.id).map((row) => row.video_id);
+  const history = db.history
+    .filter((row) => row.user_id === user.id)
+    .sort((a, b) => String(b.viewed_at).localeCompare(String(a.viewed_at)))
+    .map((row) => row.video_id);
+  const subscriptions = db.subscriptions
+    .filter((row) => row.user_id === user.id)
+    .map((row) => row.channel_name);
+  return {
+    id: user.id,
+    email: user.email,
+    full_name: user.full_name,
+    channel_name: user.channel_name,
+    role: user.role,
+    created_at: user.created_at,
+    liked_video_ids: liked,
+    history_video_ids: history,
+    subscribed_channels: subscriptions,
+  };
+}
+
+function listVideosWithMetrics() {
+  const likesMap = new Map();
+  for (const like of db.likes) {
+    likesMap.set(like.video_id, (likesMap.get(like.video_id) || 0) + 1);
+  }
+  const reportsMap = new Map();
+  for (const report of db.reports) {
+    const list = reportsMap.get(report.video_id) || [];
+    list.push(report);
+    reportsMap.set(report.video_id, list);
+  }
+  return [...db.videos]
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .map((video) => ({
+      ...video,
+      likes: likesMap.get(video.id) || 0,
+      report_count: reportsMap.get(video.id)?.length || 0,
+      reports: reportsMap.get(video.id) || [],
+      tags: parseTagsJson(video.tags_json),
+    }));
+}
+
+function listCommentsForVideo(videoId) {
+  return db.comments
+    .filter((comment) => comment.video_id === videoId)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, 200)
+    .map((comment) => {
+      const user = findUserById(comment.user_id) || {};
+      return {
+        id: comment.id,
+        content: comment.content,
+        created_at: comment.created_at,
+        user_id: user.id || comment.user_id,
+        channel_name: user.channel_name || "",
+        full_name: user.full_name || "",
+      };
+    });
+}
+
+function insertComment(videoId, userId, content) {
+  const record = {
+    id: createId("comment"),
+    video_id: videoId,
+    user_id: userId,
+    content,
+    created_at: new Date().toISOString(),
+  };
+  db.comments.push(record);
+  persistDataStore();
+  return listCommentsForVideo(videoId).find((comment) => comment.id === record.id) || null;
+}
+
+function deleteComment(videoId, commentId) {
+  db.comments = db.comments.filter((comment) => !(comment.id === commentId && comment.video_id === videoId));
+  persistDataStore();
+}
+
+function listLiveChatMessages(videoId, limit = 80) {
+  return db.live_chat_messages
+    .filter((message) => message.video_id === videoId)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .slice(-limit)
+    .map((message) => {
+      const user = findUserById(message.user_id) || {};
+      return {
+        id: message.id,
+        video_id: message.video_id,
+        message: message.message,
+        created_at: message.created_at,
+        user_id: user.id || message.user_id,
+        channel_name: user.channel_name || "",
+        full_name: user.full_name || "",
+      };
+    });
+}
+
+function insertLiveChatMessage(videoId, userId, message) {
+  const record = {
+    id: createId("lchat"),
+    video_id: videoId,
+    user_id: userId,
+    message,
+    created_at: new Date().toISOString(),
+  };
+  db.live_chat_messages.push(record);
+  persistDataStore();
+  return listLiveChatMessages(videoId).find((entry) => entry.id === record.id) || null;
 }
 
 function ensureDefaultStocks() {
   const now = new Date().toISOString();
-  const entry = get("SELECT symbol FROM stocks WHERE symbol = ?", ["mytube.co"]);
+  const entry = db.stocks.find((stock) => stock.symbol === "mytube.co");
   if (!entry) {
-    run(
-      "INSERT INTO stocks (symbol, display_name, price, change, change_percent, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ["mytube.co", "mytube.co", 100, 0, 0, now],
-      true
-    );
+    db.stocks.push({
+      symbol: "mytube.co",
+      display_name: "mytube.co",
+      price: 100,
+      change: 0,
+      change_percent: 0,
+      updated_at: now,
+      trend_mode: "stable",
+    });
+    persistDataStore();
   }
 }
 
@@ -1145,16 +1230,22 @@ function ensureAdminUsers() {
   ];
 
   for (const admin of admins) {
-    const existing = get("SELECT id FROM users WHERE lower(email) = lower(?)", [admin.email]);
+    const existing = findUserByEmail(admin.email);
     if (existing) continue;
     const userId = createId("user");
     const pass = createPasswordHash(admin.password);
-    run(
-      "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?, 'admin',?,?,?)",
-      [userId, admin.email, admin.fullName, slugFromText(admin.channel), pass.hash, pass.salt, new Date().toISOString()],
-      true
-    );
+    db.users.push({
+      id: userId,
+      email: admin.email,
+      full_name: admin.fullName,
+      channel_name: slugFromText(admin.channel),
+      role: "admin",
+      password_hash: pass.hash,
+      password_salt: pass.salt,
+      created_at: new Date().toISOString(),
+    });
   }
+  persistDataStore();
   persistLegacyUsers();
 }
 
@@ -1166,88 +1257,82 @@ function migrateLegacyJsonData() {
         continue;
       }
 
-      const existingByEmail = get("SELECT id FROM users WHERE lower(email) = lower(?)", [u.email]);
-      const existingById = get("SELECT id FROM users WHERE id = ?", [u.id]);
+      const existingByEmail = findUserByEmail(u.email);
+      const existingById = findUserById(u.id);
 
       if (existingByEmail || existingById) {
-        run(
-          `UPDATE users
-           SET email = ?, full_name = ?, channel_name = ?, role = ?, password_hash = ?, password_salt = ?, created_at = ?
-           WHERE id = ? OR lower(email) = lower(?)`,
-          [
-            u.email,
-            u.full_name || "",
-            u.channel_name || slugFromText(u.email.split("@")[0]),
-            u.role || "user",
-            u.password_hash,
-            u.password_salt,
-            u.created_at || new Date().toISOString(),
-            u.id,
-            u.email,
-          ],
-          true
-        );
+        const target = existingById || existingByEmail;
+        Object.assign(target, {
+          id: u.id,
+          email: u.email,
+          full_name: u.full_name || "",
+          channel_name: u.channel_name || slugFromText(u.email.split("@")[0]),
+          role: u.role || "user",
+          password_hash: u.password_hash,
+          password_salt: u.password_salt,
+          created_at: u.created_at || new Date().toISOString(),
+        });
         continue;
       }
 
-      run(
-        "INSERT INTO users (id,email,full_name,channel_name,role,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?,?,?)",
-        [
-          u.id,
-          u.email,
-          u.full_name || "",
-          u.channel_name || slugFromText(u.email.split("@")[0]),
-          u.role || "user",
-          u.password_hash,
-          u.password_salt,
-          u.created_at || new Date().toISOString()
-        ],
-        true
-      );
+      db.users.push({
+        id: u.id,
+        email: u.email,
+        full_name: u.full_name || "",
+        channel_name: u.channel_name || slugFromText(u.email.split("@")[0]),
+        role: u.role || "user",
+        password_hash: u.password_hash,
+        password_salt: u.password_salt,
+        created_at: u.created_at || new Date().toISOString(),
+      });
     }
   }
 
   if (fs.existsSync(LEGACY_VIDEOS_FILE)) {
     const videos = JSON.parse(fs.readFileSync(LEGACY_VIDEOS_FILE, "utf8"));
     for (const v of videos) {
-      if (!get("SELECT id FROM videos WHERE id = ?", [v.id])) {
-        run(
-          `INSERT INTO videos (
-            id,title,description,thumbnail_url,video_url,current_frame_url,
-            channel_name,owner_id,category,tags_json,views,duration,
-            is_live,is_music,created_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [
-            v.id,
-            v.title,
-            v.description,
-            v.thumbnail_url,
-            v.video_url,
-            v.current_frame_url || "",
-            v.channel_name,
-            v.owner_id,
-            v.category || "general",
-            JSON.stringify(v.tags || []),
-            v.views || 0,
-            v.duration || "0:00",
-            v.is_live ? 1 : 0,
-            v.is_music ? 1 : 0,
-            v.created_at || new Date().toISOString()
-          ],
-          true
-        );
+      if (!findVideoById(v.id)) {
+        db.videos.push({
+          id: v.id,
+          title: v.title,
+          description: v.description,
+          thumbnail_url: v.thumbnail_url,
+          video_url: v.video_url,
+          current_frame_url: v.current_frame_url || "",
+          channel_name: v.channel_name,
+          owner_id: v.owner_id,
+          category: v.category || "general",
+          tags_json: JSON.stringify(v.tags || []),
+          views: Number(v.views || 0),
+          duration: v.duration || "0:00",
+          is_live: Boolean(v.is_live),
+          is_music: Boolean(v.is_music),
+          created_at: v.created_at || new Date().toISOString(),
+        });
       }
     }
   }
+  persistDataStore();
 }
 
 function persistLegacyUsers() {
-  const users = all("SELECT id,email,full_name,channel_name,role,password_hash,password_salt,created_at FROM users");
+  const users = [...db.users]
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .map((user) => ({
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      channel_name: user.channel_name,
+      role: user.role,
+      password_hash: user.password_hash,
+      password_salt: user.password_salt,
+      created_at: user.created_at,
+    }));
   fs.writeFileSync(LEGACY_USERS_FILE, JSON.stringify(users, null, 2));
 }
 
 function persistLegacyVideos() {
-  const videos = all("SELECT * FROM videos ORDER BY created_at DESC").map((video) => ({
+  const videos = [...db.videos].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).map((video) => ({
     id: video.id,
     title: video.title,
     description: video.description,
@@ -1268,93 +1353,13 @@ function persistLegacyVideos() {
 }
 
 function clearExpiredSessions() {
-  const sessionConfig = getSessionConfig();
-  const now = sessionConfig.expiresAsInteger ? Date.now() : new Date().toISOString();
-  run("DELETE FROM sessions WHERE expires_at < ?", [now], true);
+  const now = Date.now();
+  db.sessions = db.sessions.filter((session) => sessionExpiresAt(session.expires_at) >= now);
+  persistDataStore();
 }
 
 function listVideos() {
-  const videos = all("SELECT * FROM videos ORDER BY created_at DESC");
-  const likes = all("SELECT video_id, COUNT(*) AS count FROM likes GROUP BY video_id");
-  const reports = all("SELECT * FROM reports ORDER BY created_at DESC");
-
-  const likesMap = new Map(likes.map((row) => [row.video_id, Number(row.count || 0)]));
-  const reportsMap = new Map();
-  for (const report of reports) {
-    const list = reportsMap.get(report.video_id) || [];
-    list.push(report);
-    reportsMap.set(report.video_id, list);
-  }
-
-  return videos.map((video) => ({
-    ...video,
-    likes: likesMap.get(video.id) || 0,
-    report_count: reportsMap.get(video.id)?.length || 0,
-    reports: reportsMap.get(video.id) || [],
-    tags: parseTagsJson(video.tags_json),
-  }));
-}
-
-function listCommentsForVideo(videoId) {
-  return all(
-    `SELECT c.id, c.content, c.created_at, u.id AS user_id, u.channel_name, u.full_name
-     FROM comments c
-     JOIN users u ON u.id = c.user_id
-     WHERE c.video_id = ?
-     ORDER BY c.created_at DESC
-     LIMIT 200`,
-    [videoId]
-  );
-}
-
-function insertComment(videoId, userId, content) {
-  const id = createId("comment");
-  const createdAt = new Date().toISOString();
-  run(
-    "INSERT INTO comments (id, video_id, user_id, content, created_at) VALUES (?, ?, ?, ?, ?)",
-    [id, videoId, userId, content, createdAt],
-    true
-  );
-  return get(
-    `SELECT c.id, c.content, c.created_at, u.id AS user_id, u.channel_name, u.full_name
-     FROM comments c
-     JOIN users u ON u.id = c.user_id
-     WHERE c.id = ?`,
-    [id]
-  );
-}
-
-function deleteComment(videoId, commentId) {
-  run("DELETE FROM comments WHERE id = ? AND video_id = ?", [commentId, videoId], true);
-}
-
-function listLiveChatMessages(videoId, limit = 80) {
-  return all(
-    `SELECT c.id, c.video_id, c.message, c.created_at, u.id AS user_id, u.channel_name, u.full_name
-     FROM live_chat_messages c
-     JOIN users u ON u.id = c.user_id
-     WHERE c.video_id = ?
-     ORDER BY c.created_at ASC
-     LIMIT ?`,
-    [videoId, limit]
-  );
-}
-
-function insertLiveChatMessage(videoId, userId, message) {
-  const id = createId("lchat");
-  const createdAt = new Date().toISOString();
-  run(
-    "INSERT INTO live_chat_messages (id, video_id, user_id, message, created_at) VALUES (?, ?, ?, ?, ?)",
-    [id, videoId, userId, message, createdAt],
-    true
-  );
-  return get(
-    `SELECT c.id, c.video_id, c.message, c.created_at, u.id AS user_id, u.channel_name, u.full_name
-     FROM live_chat_messages c
-     JOIN users u ON u.id = c.user_id
-     WHERE c.id = ?`,
-    [id]
-  );
+  return listVideosWithMetrics();
 }
 
 function formatChatPayload(row) {
@@ -1426,15 +1431,29 @@ function ensureViewerCountInitialized(videoId) {
 
 function updateMyTubeStock(values) {
   const now = new Date().toISOString();
-  run(
-    `UPDATE stocks SET price = ?, change = ?, change_percent = ?, updated_at = ? WHERE symbol = ?`,
-    [values.price, values.change, values.changePercent, now, "mytube.co"],
-    true
-  );
+  const stock = db.stocks.find((entry) => entry.symbol === "mytube.co");
+  if (!stock) {
+    db.stocks.push({
+      symbol: "mytube.co",
+      display_name: "mytube.co",
+      price: values.price,
+      change: values.change,
+      change_percent: values.changePercent,
+      updated_at: now,
+      trend_mode: normalizeTrendMode(values.trendMode),
+    });
+  } else {
+    stock.price = values.price;
+    stock.change = values.change;
+    stock.change_percent = values.changePercent;
+    stock.updated_at = now;
+    stock.trend_mode = normalizeTrendMode(values.trendMode || stock.trend_mode);
+  }
+  persistDataStore();
 }
 
 function getVideoRow(id) {
-  return get("SELECT * FROM videos WHERE id = ?", [id]);
+  return findVideoById(id);
 }
 
 function getVideoById(id) {
@@ -1512,18 +1531,91 @@ async function fetchRealStockQuotes() {
 }
 
 async function fetchStocks() {
-  const realStocks = await fetchRealStockQuotes();
-  const customStocks = all("SELECT symbol, display_name, price, change, change_percent, updated_at FROM stocks");
+  advanceMyTubeStock();
+  let realStocks = [];
+  try {
+    realStocks = await fetchRealStockQuotes();
+  } catch {
+    realStocks = STOCK_FALLBACKS;
+  }
+  if (!realStocks.length) {
+    realStocks = STOCK_FALLBACKS;
+  }
+  const customStocks = db.stocks;
   const normalizedCustom = customStocks.map((row) => ({
     symbol: row.symbol,
     shortName: row.display_name || row.symbol,
     price: Number(row.price || 0),
     change: Number(row.change || 0),
     changePercent: Number(row.change_percent || 0),
-    marketState: "LOCAL",
+    marketState: row.symbol === "mytube.co" ? `MYTUBE ${formatTrendLabel(row.trend_mode)}` : "LOCAL",
     updated_at: row.updated_at,
+    trendMode: row.trend_mode || "stable",
   }));
   return [...normalizedCustom, ...realStocks];
+}
+
+function normalizeTrendMode(value) {
+  const next = String(value || "stable").trim().toLowerCase().replace(/\s+/g, "_");
+  if (["fast_growth", "slow_growth", "plummet", "slow_decline", "stable"].includes(next)) {
+    return next;
+  }
+  return "stable";
+}
+
+function formatTrendLabel(mode) {
+  switch (normalizeTrendMode(mode)) {
+    case "fast_growth":
+      return "FAST GROWTH";
+    case "slow_growth":
+      return "SLOW GROWTH";
+    case "plummet":
+      return "PLUMMET";
+    case "slow_decline":
+      return "SLOW DECLINE";
+    default:
+      return "STABLE";
+  }
+}
+
+function advanceMyTubeStock() {
+  const stock = db.stocks.find((entry) => entry.symbol === "mytube.co");
+  if (!stock) return;
+  const now = Date.now();
+  const previous = new Date(stock.updated_at || 0).getTime();
+  if (!Number.isFinite(previous)) return;
+  const elapsedMs = now - previous;
+  if (elapsedMs < 5000) return;
+
+  const elapsedSteps = Math.min(20, Math.max(1, Math.floor(elapsedMs / 15000)));
+  const previousPrice = Math.max(0.01, Number(stock.price || 100));
+  let nextPrice = previousPrice;
+
+  for (let index = 0; index < elapsedSteps; index++) {
+    nextPrice *= 1 + getTrendDelta(normalizeTrendMode(stock.trend_mode));
+  }
+
+  nextPrice = Math.max(0.01, Number(nextPrice.toFixed(2)));
+  stock.change = Number((nextPrice - previousPrice).toFixed(2));
+  stock.change_percent = Number((((nextPrice - previousPrice) / previousPrice) * 100).toFixed(2));
+  stock.price = nextPrice;
+  stock.updated_at = new Date(now).toISOString();
+  persistDataStore();
+}
+
+function getTrendDelta(mode) {
+  switch (mode) {
+    case "fast_growth":
+      return 0.02 + Math.random() * 0.025;
+    case "slow_growth":
+      return 0.0015 + Math.random() * 0.004;
+    case "plummet":
+      return -(0.03 + Math.random() * 0.045);
+    case "slow_decline":
+      return -(0.001 + Math.random() * 0.004);
+    default:
+      return (Math.random() - 0.5) * 0.002;
+  }
 }
 
 function isUnderDirectory(filePath, directory) {

@@ -2,7 +2,7 @@
 
 Standalone MyTube website with:
 
-- SQLite-backed users, videos, sessions, reports, likes, history, and subscriptions
+- JSON-backed users, videos, sessions, reports, likes, history, and subscriptions
 - Cookie-based auth with `HttpOnly` sessions
 - Password hashing with `scrypt`
 - Streamed video and thumbnail uploads to `/uploads`
@@ -48,17 +48,17 @@ Recommended production setup:
 
 1. Run the app behind HTTPS.
 2. Mount persistent storage for `data/` and `uploads/`.
-3. Keep regular backups of `data/mytube.sqlite` and `uploads/`.
+3. Keep regular backups of `data/mytube-data.json`, `data/users.json`, `data/videos.json`, and `uploads/`.
 4. Put the app behind a reverse proxy like Nginx or Caddy.
 5. Set a stricter upload limit if you expect large traffic spikes.
 6. Set `NODE_ENV=production` so secure cookies and HSTS are enabled.
 
 ## Important notes
 
-- Existing JSON users/videos are imported into SQLite automatically the first time the new server boots.
+- Existing JSON users/videos are imported into the main JSON datastore automatically the first time the new server boots.
 - Existing hashed passwords from `data/users.json` are preserved during migration.
 - Uploaded files are stored on disk in `uploads/`.
-- Sessions are stored in SQLite, so they survive server restarts until they expire.
+- Sessions are stored in JSON, so they survive server restarts until they expire.
 
 ## Still recommended before a large public launch
 

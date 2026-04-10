@@ -4,7 +4,10 @@ const state = {
   user: null,
   videos: [],
   stocks: [],
+  stockHistoryBySymbol: {},
   stocksUpdatedAt: "",
+  stockChartRange: "day",
+  selectedStockSymbol: "mytube.co",
   route: null,
   sidebarCollapsed: window.innerWidth < 768,
   loading: true,
@@ -172,6 +175,18 @@ document.addEventListener("click", async (event) => {
 
   if (action === "refresh-data") {
     await refreshAppData();
+    return;
+  }
+
+  if (action === "select-stock") {
+    state.selectedStockSymbol = button.dataset.symbol || "";
+    render();
+    return;
+  }
+
+  if (action === "set-stock-range") {
+    state.stockChartRange = button.dataset.range || "day";
+    render();
     return;
   }
 
@@ -568,6 +583,7 @@ async function updateMyTubeStock(form) {
   const price = Number(formData.get("price"));
   const change = Number(formData.get("change"));
   const changePercent = Number(formData.get("change_percent") ?? formData.get("changePercent") ?? 0);
+  const trendMode = String(formData.get("trend_mode") || "stable");
   if (Number.isNaN(price) || Number.isNaN(change) || Number.isNaN(changePercent)) {
     state.notice = "Invalid stock values.";
     render();
@@ -577,7 +593,7 @@ async function updateMyTubeStock(form) {
   try {
     await api("/api/stocks/mytube", {
       method: "POST",
-      body: { price, change, changePercent },
+      body: { price, change, changePercent, trendMode },
     });
     await refreshStocks();
     state.notice = "MyTube stock updated.";
@@ -852,6 +868,10 @@ async function refreshStocks() {
     const payload = await api("/api/stocks");
     state.stocks = payload.stocks || [];
     state.stocksUpdatedAt = payload.updated_at || "";
+    state.stockHistoryBySymbol = buildStockHistoryMap(state.stocks);
+    if (!state.selectedStockSymbol || !state.stocks.some((stock) => stock.symbol === state.selectedStockSymbol)) {
+      state.selectedStockSymbol = state.stocks[0]?.symbol || "mytube.co";
+    }
     if (state.route.name === "stock") {
       render();
     }
@@ -1486,6 +1506,10 @@ function renderSearchPage() {
 }
 
 function renderStockPage() {
+  const selectedStock = state.stocks.find((stock) => stock.symbol === state.selectedStockSymbol) || state.stocks[0] || null;
+  const selectedSeries = selectedStock
+    ? (state.stockHistoryBySymbol[selectedStock.symbol]?.[state.stockChartRange] || [])
+    : [];
   return `
     <div class="max-w-[1800px] mx-auto p-4 md:p-8">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
@@ -1496,6 +1520,41 @@ function renderStockPage() {
         </div>
         <button class="${secondaryButtonClass()}" data-action="refresh-data">${iconRefresh("h-4 w-4 mr-2")}Refresh App</button>
       </div>
+
+      <section class="rounded-3xl border border-border bg-card p-5 md:p-6">
+        <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">Interactive Chart</p>
+            <h2 class="mt-2 text-2xl font-bold">${escapeHtml(selectedStock?.shortName || selectedStock?.symbol || "Select a stock")}</h2>
+            <p class="mt-2 text-sm text-muted-foreground">
+              ${selectedStock ? `${escapeHtml(selectedStock.symbol)} is currently at $${Number(selectedStock.price || 0).toFixed(2)}.` : "Choose a stock below to see its chart."}
+            </p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${["day", "week", "month", "year"].map((range) => `
+              <button
+                class="${state.stockChartRange === range ? primaryButtonClass() : secondaryButtonClass()}"
+                data-action="set-stock-range"
+                data-range="${range}"
+                type="button"
+              >${capitalize(range)}</button>
+            `).join("")}
+          </div>
+        </div>
+        <div class="mt-6">
+          ${renderStockChart(selectedStock, selectedSeries)}
+        </div>
+        <div class="mt-5 flex flex-wrap gap-2">
+          ${state.stocks.map((stock) => `
+            <button
+              class="${state.selectedStockSymbol === stock.symbol ? primaryButtonClass() : secondaryButtonClass()}"
+              data-action="select-stock"
+              data-symbol="${escapeAttr(stock.symbol)}"
+              type="button"
+            >${escapeHtml(stock.symbol)}</button>
+          `).join("")}
+        </div>
+      </section>
 
       <div class="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
         ${
@@ -1527,6 +1586,7 @@ function renderWatchPage() {
   const isSubscribed = (state.user.subscribed_channels || []).includes(video.channel_name);
   const isOwnChannel = state.user.channel_name === video.channel_name;
   const liveFrame = state.liveFrameByVideo[video.id] || video.current_frame_url;
+  const isAudioTrack = isAudioUpload(video.video_url);
 
   return `
     <div class="p-4 md:p-6 max-w-[1800px] mx-auto">
@@ -1544,7 +1604,17 @@ function renderWatchPage() {
           : `<div class="w-full h-full flex items-center justify-center bg-black text-muted-foreground">Waiting for live camera...</div>`
       )
       : video.video_url
-        ? `<video class="w-full h-full object-cover bg-black" src="${escapeAttr(video.video_url)}" controls playsinline preload="metadata"></video>`
+        ? (isAudioTrack
+            ? `<div class="h-full w-full bg-black text-white flex flex-col justify-center p-6 md:p-10">
+                ${video.thumbnail_url ? `<img class="mx-auto h-48 w-48 rounded-3xl object-cover shadow-2xl" src="${escapeAttr(video.thumbnail_url)}" alt="${escapeAttr(video.title)}" />` : `<div class="mx-auto h-48 w-48 rounded-3xl bg-white/10 flex items-center justify-center">${iconMusic("h-20 w-20 text-white/75")}</div>`}
+                <div class="mx-auto mt-8 w-full max-w-2xl">
+                  <p class="text-center text-sm uppercase tracking-[0.25em] text-white/60">MyTube Music</p>
+                  <h2 class="mt-3 text-center text-2xl font-bold">${escapeHtml(video.title)}</h2>
+                  <p class="mt-2 text-center text-white/70">${escapeHtml(video.channel_name)}</p>
+                  <audio class="mt-6 w-full" src="${escapeAttr(video.video_url)}" controls preload="metadata"></audio>
+                </div>
+              </div>`
+            : `<video class="w-full h-full object-cover bg-black" src="${escapeAttr(video.video_url)}" controls playsinline preload="metadata"></video>`)
         : video.thumbnail_url
           ? `<img class="w-full h-full object-cover" src="${escapeAttr(video.thumbnail_url)}" alt="${escapeAttr(video.title)}" />`
           : `<div class="w-full h-full flex items-center justify-center bg-secondary">${iconVideo("h-14 w-14 text-muted-foreground")}</div>`
@@ -1703,8 +1773,8 @@ function renderUploadPage(isLive) {
             <input class="${inputClass()}" type="file" name="thumbnail_file" accept="image/*" />
           </div>
           <div>
-            <label class="text-sm font-medium">Video File</label>
-            <input class="${inputClass()}" type="file" name="video_file" accept="video/*" required />
+            <label class="text-sm font-medium">Media File</label>
+            <input class="${inputClass()}" type="file" name="video_file" accept="video/mp4,video/webm,video/quicktime,.mov,audio/mpeg,.mp3" required />
           </div>
         </div>
         <div>
@@ -1736,12 +1806,19 @@ function renderUploadPage(isLive) {
           ${state.uploadLoading ? "Saving..." : "Upload Video"}
         </button>
         <div class="rounded-2xl border border-border bg-background/60 p-4 text-sm text-muted-foreground">
+          Accepted uploads: .mp4, .webm, .mov, and .mp3 for MyTube Music.
+        </div>
+        <div class="rounded-2xl border border-border bg-background/60 p-4 text-sm text-muted-foreground">
           Want to stream your camera live instead?
           <button class="ml-1 text-primary hover:underline" type="button" data-route="/go-live">Open Go Live</button>
         </div>
       </form>
     </div>
   `;
+}
+
+function isAudioUpload(url) {
+  return /\.mp3($|\?)/i.test(String(url || ""));
 }
 
 function renderProfilePage() {
@@ -1847,11 +1924,11 @@ function renderAdminPage() {
         <div class="flex items-center justify-between gap-3">
           <div>
             <h2 class="text-xl font-semibold">MyTube Stock</h2>
-            <p class="text-sm text-muted-foreground">Adjust the MyTube stock price and movement that shows up on the stock page.</p>
+            <p class="text-sm text-muted-foreground">Adjust the MyTube stock price, movement, and auto trend behavior that shows up on the stock page.</p>
           </div>
           <span class="text-xs text-muted-foreground">Live price</span>
         </div>
-          <form data-mytube-stock-form class="mt-6 grid gap-4 md:grid-cols-4">
+          <form data-mytube-stock-form class="mt-6 grid gap-4 md:grid-cols-5">
             <label class="space-y-1 text-sm text-muted-foreground">
               Price
               <input class="${inputClass()}" name="price" type="number" step="0.01" value="${escapeAttr(mytubeStock?.price || 0)}" />
@@ -1863,6 +1940,18 @@ function renderAdminPage() {
             <label class="space-y-1 text-sm text-muted-foreground">
               Change %
               <input class="${inputClass()}" name="change_percent" type="number" step="0.01" value="${escapeAttr(mytubeStock?.changePercent || 0)}" />
+            </label>
+            <label class="space-y-1 text-sm text-muted-foreground">
+              Trend
+              <select class="${inputClass()}" name="trend_mode">
+                ${[
+                  ["stable", "Stable"],
+                  ["slow_growth", "Grow Slowly"],
+                  ["fast_growth", "Grow Fast"],
+                  ["slow_decline", "Deplete Slowly"],
+                  ["plummet", "Plummet"],
+                ].map(([value, label]) => `<option value="${value}" ${(mytubeStock?.trendMode || "stable") === value ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
             </label>
           <button class="${primaryButtonClass()}" type="submit">Update MyTube Stock</button>
         </form>
@@ -2023,7 +2112,7 @@ function renderAuthLayout({ title, subtitle, form }) {
               </p>
             </div>
             <div class="space-y-4">
-              ${featureRow("Best place to watch videos in school", "Since MyTube runs entirely on your local network, you can access it even if securly blocks popular other video platforms.")}
+              ${featureRow("Best place to watch videos in school", "Since MyTube runs entirely on your local network, you can access it even if securly blocks other popular video platforms.")}
               ${featureRow("Upload your own videos", "Share videos with your friends or classmates by uploading them to your MyTube Channel.")}
               ${featureRow("Manage your accounts", "Create multiple user accounts for different people using the same MyTube instance, or just to have a separate account for school and personal use.")}
             </div>
@@ -2101,8 +2190,12 @@ function featureRow(title, text) {
 
 function renderStockCard(stock) {
   const positive = Number(stock.change || 0) >= 0;
+  const sourceLabel = stock.symbol === "mytube.co"
+    ? formatTrendMode(stock.trendMode || "stable")
+    : (stock.marketState || "REGULAR");
+  const sparkline = state.stockHistoryBySymbol[stock.symbol]?.day || [];
   return `
-    <div class="rounded-2xl border border-border bg-card p-5">
+    <button class="rounded-2xl border border-border bg-card p-5 text-left w-full ${state.selectedStockSymbol === stock.symbol ? "ring-2 ring-primary" : ""}" data-action="select-stock" data-symbol="${escapeAttr(stock.symbol)}" type="button">
       <div class="flex items-start justify-between gap-3">
         <div>
           <p class="text-xs text-muted-foreground uppercase tracking-wider">${escapeHtml(stock.symbol)}</p>
@@ -2116,9 +2209,176 @@ function renderStockCard(stock) {
       <p class="mt-2 text-sm ${positive ? "text-emerald-300" : "text-red-300"}">
         ${positive ? "+" : ""}${Number(stock.change || 0).toFixed(2)} today
       </p>
-      <p class="mt-2 text-xs text-muted-foreground">${escapeHtml(stock.marketState || "REGULAR")}</p>
+      <p class="mt-2 text-xs text-muted-foreground">${escapeHtml(sourceLabel)}</p>
+      <div class="mt-4">
+        ${renderMiniStockChart(sparkline, positive)}
+      </div>
+    </button>
+  `;
+}
+
+function formatTrendMode(mode) {
+  switch (String(mode || "stable")) {
+    case "fast_growth":
+      return "Fast Growth";
+    case "slow_growth":
+      return "Slow Growth";
+    case "plummet":
+      return "Plummet";
+    case "slow_decline":
+      return "Slow Decline";
+    default:
+      return "Stable";
+  }
+}
+
+function renderStockChart(stock, series) {
+  if (!stock || !series.length) {
+    return `<div class="rounded-2xl border border-border bg-background/40 p-8 text-muted-foreground">Chart data is loading.</div>`;
+  }
+  const positive = Number(stock.change || 0) >= 0;
+  const stroke = positive ? "#34d399" : "#f87171";
+  const area = positive ? "rgba(52, 211, 153, 0.18)" : "rgba(248, 113, 113, 0.18)";
+  const points = buildChartPoints(series, 760, 260);
+  const labels = formatStockLabels(series, state.stockChartRange);
+  const low = Math.min(...series.map((point) => point.value));
+  const high = Math.max(...series.map((point) => point.value));
+  return `
+    <div class="rounded-3xl border border-border bg-background/40 p-4 md:p-5">
+      <div class="grid md:grid-cols-[minmax(0,1fr)_220px] gap-5 items-start">
+        <div>
+          <svg viewBox="0 0 760 260" class="w-full h-auto overflow-visible" role="img" aria-label="Stock chart">
+            <defs>
+              <linearGradient id="stock-fill-${escapeAttr(stock.symbol)}" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="${area}" />
+                <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+              </linearGradient>
+            </defs>
+            <path d="${points.areaPath}" fill="url(#stock-fill-${escapeAttr(stock.symbol)})"></path>
+            <path d="${points.linePath}" fill="none" stroke="${stroke}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+            ${points.markers.map((marker) => `<circle cx="${marker.x}" cy="${marker.y}" r="4" fill="${stroke}"></circle>`).join("")}
+          </svg>
+          <div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+            <span>${escapeHtml(labels.start)}</span>
+            <span>${escapeHtml(labels.middle)}</span>
+            <span>${escapeHtml(labels.end)}</span>
+          </div>
+        </div>
+        <div class="grid gap-3">
+          ${statCard("Current", `$${Number(stock.price || 0).toFixed(2)}`)}
+          ${statCard("Range High", `$${high.toFixed(2)}`)}
+          ${statCard("Range Low", `$${low.toFixed(2)}`)}
+        </div>
+      </div>
     </div>
   `;
+}
+
+function renderMiniStockChart(series, positive) {
+  if (!series.length) {
+    return `<div class="h-16 rounded-xl bg-background/40"></div>`;
+  }
+  const points = buildChartPoints(series, 240, 64);
+  return `
+    <svg viewBox="0 0 240 64" class="w-full h-16">
+      <path d="${points.linePath}" fill="none" stroke="${positive ? "#34d399" : "#f87171"}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  `;
+}
+
+function buildStockHistoryMap(stocks) {
+  return Object.fromEntries((stocks || []).map((stock) => [
+    stock.symbol,
+    {
+      day: buildSyntheticStockSeries(stock, "day"),
+      week: buildSyntheticStockSeries(stock, "week"),
+      month: buildSyntheticStockSeries(stock, "month"),
+      year: buildSyntheticStockSeries(stock, "year"),
+    },
+  ]));
+}
+
+function buildSyntheticStockSeries(stock, range) {
+  const config = getStockRangeConfig(range);
+  const seed = hashString(`${stock.symbol}:${range}`);
+  const price = Math.max(0.01, Number(stock.price || 0));
+  const priorClose = Math.max(0.01, price - Number(stock.change || 0));
+  const now = Date.now();
+  const values = [];
+
+  for (let index = 0; index < config.points; index++) {
+    const progress = index / Math.max(1, config.points - 1);
+    const wave = Math.sin(progress * Math.PI * (2 + (seed % 3))) * config.volatility * price;
+    const jitter = (((seed + index * 17) % 100) / 100 - 0.5) * config.volatility * price * 0.55;
+    const drift = (price - priorClose) * progress;
+    const eased = Math.sin(progress * Math.PI) * wave;
+    const value = Math.max(0.01, priorClose + drift + eased + jitter);
+    values.push({
+      value: Number(value.toFixed(2)),
+      time: now - (config.points - 1 - index) * config.stepMs,
+    });
+  }
+
+  values[values.length - 1] = { value: Number(price.toFixed(2)), time: now };
+  return values;
+}
+
+function getStockRangeConfig(range) {
+  switch (range) {
+    case "week":
+      return { points: 7, stepMs: 1000 * 60 * 60 * 24, volatility: 0.012 };
+    case "month":
+      return { points: 30, stepMs: 1000 * 60 * 60 * 24, volatility: 0.02 };
+    case "year":
+      return { points: 12, stepMs: 1000 * 60 * 60 * 24 * 30, volatility: 0.06 };
+    default:
+      return { points: 24, stepMs: 1000 * 60 * 60, volatility: 0.008 };
+  }
+}
+
+function buildChartPoints(series, width, height) {
+  const padding = 10;
+  const values = series.map((point) => Number(point.value || 0));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(0.01, max - min);
+  const coords = series.map((point, index) => {
+    const x = padding + (index / Math.max(1, series.length - 1)) * (width - padding * 2);
+    const y = height - padding - ((Number(point.value || 0) - min) / span) * (height - padding * 2);
+    return { x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) };
+  });
+  const linePath = coords.map((coord, index) => `${index === 0 ? "M" : "L"} ${coord.x} ${coord.y}`).join(" ");
+  const areaPath = `${linePath} L ${coords[coords.length - 1].x} ${height - padding} L ${coords[0].x} ${height - padding} Z`;
+  const markers = [coords[0], coords[Math.floor(coords.length / 2)], coords[coords.length - 1]];
+  return { linePath, areaPath, markers };
+}
+
+function formatStockLabels(series, range) {
+  const formatter = getStockLabelFormatter(range);
+  return {
+    start: formatter(series[0]?.time),
+    middle: formatter(series[Math.floor(series.length / 2)]?.time),
+    end: formatter(series[series.length - 1]?.time),
+  };
+}
+
+function getStockLabelFormatter(range) {
+  if (range === "day") {
+    return (value) => new Date(value || Date.now()).toLocaleTimeString([], { hour: "numeric" });
+  }
+  if (range === "week" || range === "month") {
+    return (value) => new Date(value || Date.now()).toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  return (value) => new Date(value || Date.now()).toLocaleDateString([], { month: "short", year: "2-digit" });
+}
+
+function hashString(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index++) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function statCard(label, value) {
