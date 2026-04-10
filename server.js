@@ -100,6 +100,7 @@ async function bootstrap() {
   ensureDefaultStocks();
   migrateLegacyJsonData();
   persistLegacyUsers();
+  persistLegacyVideos();
   ensureAdminUsers();
   clearExpiredSessions();
 
@@ -282,6 +283,7 @@ async function handleApi(req, res, url) {
       true
     );
 
+    persistLegacyVideos();
     sendJson(res, 201, { video: getVideoById(videoId) });
     return;
   }
@@ -420,6 +422,7 @@ async function handleApi(req, res, url) {
       run("DELETE FROM live_chat_messages WHERE video_id = ?", [videoId]);
       run("DELETE FROM signals WHERE video_id = ?", [videoId]);
       run("DELETE FROM videos WHERE id = ?", [videoId], true);
+      persistLegacyVideos();
       liveChatStreams.delete(videoId);
       viewerCounts.delete(videoId);
       broadcastViewerCount(videoId);
@@ -597,6 +600,7 @@ async function handleApi(req, res, url) {
         [frame, frame, videoId],
         true
       );
+      persistLegacyVideos();
       broadcastToLiveChat(videoId, "frame", { videoId, frame });
       sendJson(res, 200, { ok: true });
       return;
@@ -616,6 +620,7 @@ async function handleApi(req, res, url) {
       }
       run("UPDATE videos SET is_live = 0 WHERE id = ?", [videoId], true);
       run("DELETE FROM signals WHERE video_id = ?", [videoId], true);
+      persistLegacyVideos();
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -1233,13 +1238,33 @@ function migrateLegacyJsonData() {
         );
       }
     }
-    fs.rmSync(LEGACY_VIDEOS_FILE, { force: true });
   }
 }
 
 function persistLegacyUsers() {
   const users = all("SELECT id,email,full_name,channel_name,role,password_hash,password_salt,created_at FROM users");
   fs.writeFileSync(LEGACY_USERS_FILE, JSON.stringify(users, null, 2));
+}
+
+function persistLegacyVideos() {
+  const videos = all("SELECT * FROM videos ORDER BY created_at DESC").map((video) => ({
+    id: video.id,
+    title: video.title,
+    description: video.description,
+    thumbnail_url: video.thumbnail_url,
+    video_url: video.video_url,
+    current_frame_url: video.current_frame_url,
+    channel_name: video.channel_name,
+    owner_id: video.owner_id,
+    category: video.category,
+    tags: parseTagsJson(video.tags_json),
+    views: Number(video.views || 0),
+    duration: video.duration,
+    is_live: Boolean(video.is_live),
+    is_music: Boolean(video.is_music),
+    created_at: video.created_at,
+  }));
+  fs.writeFileSync(LEGACY_VIDEOS_FILE, JSON.stringify(videos, null, 2));
 }
 
 function clearExpiredSessions() {
