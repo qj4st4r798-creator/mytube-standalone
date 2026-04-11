@@ -109,10 +109,10 @@
     {
       "symbol": "mytube.co",
       "display_name": "mytube.co",
-      "price": 198.94,
-      "change": 7.72,
-      "change_percent": 4.04,
-      "updated_at": "2026-04-10T14:55:30.689Z",
+      "price": 0.01,
+      "change": 0,
+      "change_percent": 0,
+      "updated_at": "2026-04-11T16:44:23.092Z",
       "trend_mode": "fast_growth"
     }
   ]
