@@ -7,7 +7,7 @@
     "role": "admin",
     "password_hash": "c12312e26cc571af0cb69df167e0012c9512730f65d5ed4520b928c922848c3e",
     "password_salt": "e27467bdc64c888b38d2b6e197b3a22b",
-    "created_at": "2026-04-05T19:00:00.000Z"
+    "created_at": "2023-04-05T19:00:00.000Z"
   },
   {
     "id": "user_jjordan_admin",
@@ -17,7 +17,7 @@
     "role": "admin",
     "password_hash": "d30241d5ed1468b149cad3de190ffe7fd3d3da362fc09ec2ae5aa92b43e398ce",
     "password_salt": "25a593d16150e78c884b87eb05b12906",
-    "created_at": "2026-04-05T19:00:00.000Z"
+    "created_at": "2024-04-05T19:00:00.000Z"
   },
   {
     "id": "user_535e25b661c99b68",
@@ -33,7 +33,7 @@
     "id": "user_suckysuckyhair_dev",
     "email": "Suckysuckyhair_dev@mytube.co",
     "full_name": "Suckysuckyhair Dev",
-    "channel_name": "suckysuckyhair-dev",
+    "channel_name": "Suckysuckyhair",
     "role": "admin",
     "password_hash": "652dbdf46e9cba4df15e0902fd271933134deea1d05632f311c8f437b93d4257",
     "password_salt": "d32a8a3fbd2e7532504558677f244b01",
