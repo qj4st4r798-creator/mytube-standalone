@@ -468,6 +468,12 @@ async function createVideo(formData) {
   try {
     const isLive = String(formData.get("is_live") || "").toLowerCase() === "true" || formData.get("is_live") === "on";
     const isMusic = formData.get("is_music") === "on";
+    const isFinancial = formData.get("is_financial") === "on";
+    const rawTags = String(formData.get("tags") || "");
+    const normalizedTags = Array.from(new Set([
+      ...rawTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      ...(isFinancial ? ["stock", "finance"] : []),
+    ])).join(", ");
     if (isLive && !runtime.cameraStream) {
       throw new Error("Enable your camera before starting a live broadcast.");
     }
@@ -475,8 +481,8 @@ async function createVideo(formData) {
     const multipart = new FormData();
     multipart.set("title", String(formData.get("title") || "").trim());
     multipart.set("description", String(formData.get("description") || "").trim());
-    multipart.set("category", String(formData.get("category") || "general"));
-    multipart.set("tags", String(formData.get("tags") || ""));
+    multipart.set("category", isFinancial ? "stock" : String(formData.get("category") || "general"));
+    multipart.set("tags", normalizedTags);
     multipart.set("duration", String(formData.get("duration") || "0:00"));
     multipart.set("is_live", isLive ? "true" : "false");
     multipart.set("is_music", isMusic ? "true" : "false");
@@ -1737,6 +1743,10 @@ function renderUploadPage(isLive) {
                 <input type="checkbox" name="is_music" />
                 Music content
               </label>
+              <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <input type="checkbox" name="is_financial" />
+                Financial video
+              </label>
             </div>
             ${renderMessage()}
             <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
@@ -1799,6 +1809,10 @@ function renderUploadPage(isLive) {
           <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
             <input type="checkbox" name="is_music" />
             Music content
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <input type="checkbox" name="is_financial" />
+            Financial video
           </label>
         </div>
         ${renderMessage()}
