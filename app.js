@@ -48,6 +48,9 @@ const runtime = {
   liveViewerPoller: null,
 };
 
+const THEME_STORAGE_KEY = "theme";
+const THEME_VARS_STYLE_ID = "theme-vars";
+
 const routeTable = [
   { name: "home", pattern: "/" },
   { name: "trending", pattern: "/trending" },
@@ -105,6 +108,7 @@ const sidebarSections = [
 ];
 
 state.route = parseRoute();
+initializeTheme();
 
 window.addEventListener("hashchange", async () => {
   state.route = parseRoute();
@@ -137,6 +141,18 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (action === "toggle-theme") {
+    toggleTheme();
+    render();
+    return;
+  }
+
+  if (action === "scroll-section") {
+    const target = document.getElementById(button.dataset.section || "");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
   if (action === "logout") {
     try {
       await api("/api/logout", { method: "POST" });
@@ -145,7 +161,7 @@ document.addEventListener("click", async (event) => {
     state.videos = [];
     state.notice = "You have been logged out.";
     state.route = parseRoute();
-    setRoute("/login");
+    setRoute("/");
     return;
   }
 
@@ -277,11 +293,6 @@ bootstrap();
 async function bootstrap() {
   await refreshAppData();
 
-  if (!state.user && !isPublicRoute(state.route.name)) {
-    setRoute("/login");
-    return;
-  }
-
   await handleRouteEffects();
   render();
 }
@@ -366,6 +377,7 @@ async function api(path, options = {}) {
 async function refreshAppData() {
   state.loading = true;
   render();
+  const hadUser = Boolean(state.user);
 
   try {
     const [user, videosResponse] = await Promise.all([api("/api/me"), api("/api/videos")]);
@@ -375,7 +387,7 @@ async function refreshAppData() {
   } catch (error) {
     state.user = null;
     state.videos = [];
-    if (!isPublicRoute(state.route.name)) {
+    if (hadUser) {
       state.error = error.message;
     }
   } finally {
@@ -1201,11 +1213,232 @@ function disconnectLiveAudioStream() {
 
 
 function render() {
-  root.innerHTML = state.user ? renderShell() : renderPublicPage();
+  if (!state.user && state.route.name !== "login" && state.route.name !== "signup") {
+    root.innerHTML = renderEducationHomepage();
+  } else if (state.user) {
+    root.innerHTML = renderShell();
+  } else {
+    root.innerHTML = renderPublicPage();
+  }
   syncLivePreview();
   syncBackgroundEffects();
   syncLiveViewer();
   syncLiveChatStream();
+}
+
+function renderEducationHomepage() {
+  const darkMode = getTheme() === "dark";
+  const pageClass = darkMode
+    ? "min-h-screen bg-slate-950 text-slate-100"
+    : "min-h-screen bg-gradient-to-b from-slate-50 via-white to-slate-100 text-slate-900";
+  const headerClass = darkMode
+    ? "sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur"
+    : "sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur";
+  const surfaceClass = darkMode ? "bg-slate-900" : "bg-white";
+  const softSurfaceClass = darkMode ? "bg-slate-800/70" : "bg-slate-50";
+  const borderClass = darkMode ? "border-slate-800" : "border-slate-200";
+  const mutedTextClass = darkMode ? "text-slate-300" : "text-slate-600";
+  const headingClass = darkMode ? "text-white" : "text-slate-900";
+  const subTextClass = darkMode ? "text-slate-400" : "text-slate-500";
+
+  return `
+    <div class="${pageClass}">
+      <header class="${headerClass}">
+        <div class="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-4 py-4 md:px-8">
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
+              ${iconSpark("h-5 w-5")}
+            </div>
+            <div>
+              <p class="text-sm font-semibold tracking-[0.2em] text-blue-700 uppercase ${darkMode ? "dark:text-blue-300" : ""}">Northstar Math Academy</p>
+              <p class="text-xs ${subTextClass}">Clear lessons, steady practice, stronger results</p>
+            </div>
+          </div>
+          <nav class="hidden items-center gap-2 md:flex">
+            ${["Home", "Lessons", "Practice", "Resources", "About"].map((label) => `
+              <button
+                class="rounded-full px-4 py-2 text-sm font-medium ${darkMode ? "text-slate-300 hover:bg-slate-800 hover:text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"} transition"
+                type="button"
+                data-action="scroll-section"
+                data-section="${label.toLowerCase()}"
+              >
+                ${label}
+              </button>
+            `).join("")}
+          </nav>
+          <div class="flex items-center gap-2">
+            ${renderThemeToggleButton()}
+            <button class="inline-flex items-center justify-center rounded-md border ${darkMode ? "border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"} px-4 py-2.5 text-sm font-medium" data-route="/login" type="button">
+              Enter MyTube
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="mx-auto max-w-[1800px] px-4 pb-16 pt-6 md:px-8 md:pt-10">
+        <section id="home" class="overflow-hidden rounded-[2rem] border ${borderClass} ${surfaceClass} shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
+          <div class="grid gap-10 px-6 py-10 md:px-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:px-12 lg:py-14">
+            <div class="max-w-2xl">
+              <div class="inline-flex items-center gap-2 rounded-full border ${darkMode ? "border-blue-900/60 bg-blue-950/50 text-blue-300" : "border-blue-200 bg-blue-50 text-blue-700"} px-3 py-1 text-xs font-medium">
+                ${iconSpark("h-4 w-4")}
+                Guided learning for algebra, geometry, and beyond
+              </div>
+              <h1 class="mt-5 text-4xl font-bold tracking-tight ${headingClass} md:text-6xl">
+                Learn math with structure, confidence, and everyday practice.
+              </h1>
+              <p class="mt-5 max-w-xl text-lg leading-8 ${mutedTextClass}">
+                Explore lessons that break down difficult ideas, practice sets that build fluency, and resources that make each step easier to understand.
+              </p>
+              <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+                <button class="inline-flex items-center justify-center rounded-md ${darkMode ? "bg-blue-500 hover:bg-blue-400" : "bg-blue-600 hover:bg-blue-700"} px-4 py-2.5 text-sm font-medium text-white" data-route="/login" type="button">
+                  Enter MyTube
+                </button>
+                <button class="inline-flex items-center justify-center rounded-md border ${darkMode ? "border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700" : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"} px-4 py-2.5 text-sm font-medium" type="button" data-action="scroll-section" data-section="lessons">
+                  Explore Lessons
+                </button>
+              </div>
+              <div class="mt-10 grid gap-4 sm:grid-cols-3">
+                ${[
+                  ["Lesson pace", "Small steps that build into full understanding."],
+                  ["Practice focus", "Repetition with purpose, not noise."],
+                  ["Ready resources", "Reference sheets, examples, and review tools."],
+                ].map(([title, text]) => `
+                  <div class="rounded-2xl border ${borderClass} ${softSurfaceClass} p-4">
+                    <p class="text-sm font-semibold ${headingClass}">${title}</p>
+                    <p class="mt-2 text-sm leading-6 ${mutedTextClass}">${text}</p>
+                  </div>
+                `).join("")}
+              </div>
+            </div>
+
+            <div class="grid gap-4">
+              <div class="rounded-[1.75rem] border ${borderClass} ${softSurfaceClass} p-5">
+                <div class="flex items-center justify-between">
+                  <p class="text-sm font-semibold ${headingClass}">Worked Example</p>
+                  <span class="rounded-full ${darkMode ? "bg-blue-950/70 text-blue-300" : "bg-blue-100 text-blue-700"} px-3 py-1 text-xs font-medium">Algebra</span>
+                </div>
+                <div class="mt-5 rounded-2xl ${surfaceClass} p-5 shadow-sm">
+                  <p class="text-sm ${subTextClass}">Solve for <span class="font-semibold ${headingClass}">x</span>:</p>
+                  <div class="mt-4 space-y-3 text-lg font-semibold ${headingClass}">
+                    <div>2x + 8 = 20</div>
+                    <div class="${darkMode ? "text-blue-300" : "text-blue-600"}">2x = 12</div>
+                    <div class="${darkMode ? "text-emerald-300" : "text-emerald-600"}">x = 6</div>
+                  </div>
+                </div>
+              </div>
+              ${renderMathDiagram()}
+            </div>
+          </div>
+        </section>
+
+        <section id="lessons" class="mt-8 grid gap-6 lg:grid-cols-3">
+          ${[
+            ["Lessons", "Short, focused explanations for algebra, geometry, fractions, and problem solving.", iconBook("h-5 w-5")],
+            ["Practice", "Timed drills, review sets, and guided problem solving to strengthen retention.", iconCheck("h-5 w-5")],
+            ["Resources", "Formula sheets, diagrams, and class-friendly references you can return to anytime.", iconShield("h-5 w-5")],
+          ].map(([title, text, icon]) => `
+            <article class="rounded-[1.75rem] border ${borderClass} ${surfaceClass} p-6 shadow-sm">
+              <div class="flex h-11 w-11 items-center justify-center rounded-2xl ${darkMode ? "bg-blue-950/60 text-blue-300" : "bg-blue-50 text-blue-700"}">${icon}</div>
+              <h2 class="mt-5 text-2xl font-bold ${headingClass}">${title}</h2>
+              <p class="mt-3 text-sm leading-7 ${mutedTextClass}">${text}</p>
+            </article>
+          `).join("")}
+        </section>
+
+        <section id="practice" class="mt-8 grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+          <div class="rounded-[1.75rem] border ${borderClass} ${surfaceClass} p-6">
+            <p class="text-xs font-semibold uppercase tracking-[0.25em] ${darkMode ? "text-blue-300" : "text-blue-700"}">Practice</p>
+            <h2 class="mt-3 text-3xl font-bold ${headingClass}">Turn concepts into confidence.</h2>
+            <p class="mt-4 text-sm leading-7 ${mutedTextClass}">
+              Use step-by-step drills to check understanding, revisit missed ideas, and build speed with familiar problem types.
+            </p>
+            <div class="mt-6 space-y-3">
+              ${[
+                "Evaluate expressions with order of operations",
+                "Graph lines using slope and intercept",
+                "Find area, perimeter, and volume with unit checks",
+              ].map((item) => `
+                <div class="flex items-start gap-3 rounded-2xl ${softSurfaceClass} p-4">
+                  <div class="mt-0.5 rounded-full ${darkMode ? "bg-blue-950/70 text-blue-300" : "bg-blue-100 text-blue-700"} p-1">${iconCheck("h-4 w-4")}</div>
+                  <p class="text-sm ${darkMode ? "text-slate-200" : "text-slate-700"}">${item}</p>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+          <div class="rounded-[1.75rem] border ${borderClass} ${darkMode ? "bg-gradient-to-br from-slate-900 to-slate-800" : "bg-gradient-to-br from-slate-50 to-blue-50"} p-6">
+            <p class="text-xs font-semibold uppercase tracking-[0.25em] ${subTextClass}">Equation Corner</p>
+            <div class="mt-5 grid gap-4 md:grid-cols-2">
+              <div class="rounded-2xl ${surfaceClass} p-5 shadow-sm">
+                <p class="text-sm ${subTextClass}">Linear function</p>
+                <p class="mt-3 text-2xl font-bold ${headingClass}">f(x) = mx + b</p>
+                <p class="mt-2 text-sm ${mutedTextClass}">Slope controls the rise, and b sets the starting point.</p>
+              </div>
+              <div class="rounded-2xl ${surfaceClass} p-5 shadow-sm">
+                <p class="text-sm ${subTextClass}">Pythagorean theorem</p>
+                <p class="mt-3 text-2xl font-bold ${headingClass}">a² + b² = c²</p>
+                <p class="mt-2 text-sm ${mutedTextClass}">A classic relationship for right triangles.</p>
+              </div>
+              <div class="rounded-2xl ${surfaceClass} p-5 shadow-sm">
+                <p class="text-sm ${subTextClass}">Area of a circle</p>
+                <p class="mt-3 text-2xl font-bold ${headingClass}">A = πr²</p>
+                <p class="mt-2 text-sm ${mutedTextClass}">Measure radius first, then square it.</p>
+              </div>
+              <div class="rounded-2xl ${surfaceClass} p-5 shadow-sm">
+                <p class="text-sm ${subTextClass}">Fraction focus</p>
+                <p class="mt-3 text-2xl font-bold ${headingClass}">3/4 + 1/8 = 7/8</p>
+                <p class="mt-2 text-sm ${mutedTextClass}">Find a common denominator before combining parts.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="resources" class="mt-8 grid gap-6 md:grid-cols-3">
+          ${[
+            ["Formula sheet", "A quick reference for key identities, units, and common conversions."],
+            ["Graph paper", "Use coordinate grids to plot points and compare patterns."],
+            ["Review guide", "A simple checklist for test prep and lesson recap."],
+          ].map(([title, text]) => `
+            <article class="rounded-[1.75rem] border ${borderClass} ${surfaceClass} p-6">
+              <p class="text-lg font-semibold ${headingClass}">${title}</p>
+              <p class="mt-3 text-sm leading-7 ${mutedTextClass}">${text}</p>
+            </article>
+          `).join("")}
+        </section>
+
+        <section id="about" class="mt-8 rounded-[1.75rem] border ${borderClass} ${surfaceClass} p-6 md:p-8">
+          <div class="grid gap-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.25em] ${darkMode ? "text-blue-300" : "text-blue-700"}">About</p>
+              <h2 class="mt-3 text-3xl font-bold ${headingClass}">A calm place to study math, one idea at a time.</h2>
+              <p class="mt-4 max-w-2xl text-sm leading-7 ${mutedTextClass}">
+                The structure is intentionally simple: clear explanations, useful examples, and practice that reinforces what was just learned. It is designed to feel academic, organized, and easy to navigate.
+              </p>
+            </div>
+            <div class="grid gap-4 sm:grid-cols-2">
+              ${[
+                ["Home", "A starting point for the day’s work."],
+                ["Lessons", "Learn concepts with step-by-step clarity."],
+                ["Practice", "Build fluency through repeated problem solving."],
+                ["Resources", "Keep the tools you need close at hand."],
+              ].map(([title, text]) => `
+                <div class="rounded-2xl border ${borderClass} ${softSurfaceClass} p-4">
+                  <p class="font-semibold ${headingClass}">${title}</p>
+                  <p class="mt-2 text-sm ${mutedTextClass}">${text}</p>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+
+        <footer class="flex flex-col items-start justify-between gap-4 px-1 pt-8 sm:flex-row sm:items-center">
+          <p class="text-sm ${subTextClass}">Built for focused, school-safe math study.</p>
+          <button class="inline-flex items-center justify-center rounded-md ${darkMode ? "bg-blue-500 hover:bg-blue-400" : "bg-blue-600 hover:bg-blue-700"} px-4 py-2.5 text-sm font-medium text-white" data-route="/login" type="button">
+            Enter MyTube
+          </button>
+        </footer>
+      </main>
+    </div>
+  `;
 }
 
 function renderPublicPage() {
@@ -1310,6 +1543,7 @@ function renderHeader() {
       </form>
 
       <div class="flex-1 md:hidden"></div>
+      ${renderThemeToggleButton()}
       <div class="hidden sm:flex items-center gap-3 rounded-full bg-secondary px-3 py-1.5">
         <div class="h-8 w-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-semibold text-sm">
           ${escapeHtml((state.user.full_name || state.user.email || "U").charAt(0).toUpperCase())}
@@ -2109,18 +2343,18 @@ function renderAuthLayout({ title, subtitle, form }) {
   return `
     <div class="min-h-screen bg-background text-foreground">
       <div class="fixed inset-0 pointer-events-none">
-        <div class="absolute -top-12 -left-12 h-72 w-72 rounded-full bg-primary/10 blur-3xl"></div>
-        <div class="absolute -bottom-12 -right-12 h-72 w-72 rounded-full bg-red-500/10 blur-3xl"></div>
+        <div class="absolute -top-12 -left-12 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl dark:bg-primary/10"></div>
+        <div class="absolute -bottom-12 -right-12 h-72 w-72 rounded-full bg-slate-500/10 blur-3xl dark:bg-red-500/10"></div>
       </div>
       <div class="relative min-h-screen flex items-center justify-center p-4">
         <div class="w-full max-w-6xl grid md:grid-cols-2 rounded-3xl overflow-hidden border border-border bg-card shadow-2xl">
-          <div class="hidden md:flex flex-col justify-between p-10 border-r border-border bg-gradient-to-br from-zinc-950 via-zinc-900 to-red-950">
+          <div class="hidden md:flex flex-col justify-between p-10 border-r border-border bg-gradient-to-br from-slate-50 via-slate-100 to-blue-100 dark:from-zinc-950 dark:via-zinc-900 dark:to-red-950">
             <div>
-              <div class="inline-flex items-center gap-2 rounded-full border border-border bg-background/40 px-3 py-1 text-xs text-muted-foreground">
+              <div class="inline-flex items-center gap-2 rounded-full border border-border bg-background/60 px-3 py-1 text-xs text-muted-foreground">
                 ${iconShield("h-4 w-4 text-primary")}
                 Local Authentication
               </div>
-              <h1 class="mt-6 text-4xl font-bold">Welcome to MyTube!</h1>
+              <h1 class="mt-6 text-4xl font-bold text-slate-900 dark:text-white">Welcome to MyTube!</h1>
               <p class="mt-4 text-base text-muted-foreground max-w-md">
                 Create an account or sign in to start uploading and watching videos on your own private MyTube instance. Your data is stored locally and never shared with any third parties or teachers 😏😏😏.
               </p>
@@ -2131,7 +2365,10 @@ function renderAuthLayout({ title, subtitle, form }) {
               ${featureRow("Manage your accounts", "Create multiple user accounts for different people using the same MyTube instance, or just to have a separate account for school and personal use.")}
             </div>
           </div>
-          <div class="p-6 md:p-10">
+          <div class="relative p-6 md:p-10">
+            <div class="absolute right-4 top-4">
+              ${renderThemeToggleButton()}
+            </div>
             <div class="max-w-md mx-auto">
               <div class="flex items-center gap-3 mb-8">
                 <div class="bg-primary rounded-xl p-2">${iconVideo("h-6 w-6 text-primary-foreground")}</div>
@@ -2188,6 +2425,58 @@ function renderFlashNotice() {
 function renderMessage() {
   if (!state.error) return "";
   return `<div class="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">${escapeHtml(state.error)}</div>`;
+}
+
+function renderThemeToggleButton() {
+  const theme = getTheme();
+  const isDark = theme === "dark";
+  const label = isDark ? "Light mode" : "Dark mode";
+  const icon = isDark ? iconSun("h-4 w-4") : iconMoon("h-4 w-4");
+  return `
+    <button
+      class="${secondaryButtonClass("gap-2 whitespace-nowrap")}"
+      data-action="toggle-theme"
+      type="button"
+      aria-label="${label}"
+      title="${label}"
+    >
+      ${icon}
+      <span class="hidden sm:inline">${label}</span>
+    </button>
+  `;
+}
+
+function renderMathDiagram() {
+  const darkMode = getTheme() === "dark";
+  const borderClass = darkMode ? "border-slate-700" : "border-slate-200";
+  const surfaceClass = darkMode ? "bg-slate-800/80" : "bg-slate-50";
+  const headingClass = darkMode ? "text-white" : "text-slate-900";
+  const mutedTextClass = darkMode ? "text-slate-300" : "text-slate-600";
+
+  return `
+    <div class="rounded-[1.75rem] border ${borderClass} ${surfaceClass} p-5">
+      <div class="flex items-center justify-between">
+        <p class="text-sm font-semibold ${headingClass}">Coordinate sketch</p>
+        <span class="rounded-full ${darkMode ? "bg-slate-700 text-slate-300" : "bg-slate-200 text-slate-600"} px-3 py-1 text-xs">Diagram</span>
+      </div>
+      <svg viewBox="0 0 360 220" class="mt-4 h-auto w-full overflow-visible" aria-label="Math diagram">
+        <rect x="0" y="0" width="360" height="220" rx="24" fill="${darkMode ? "rgba(15,23,42,0.82)" : "rgba(255,255,255,0.72)"}"></rect>
+        <g stroke="${darkMode ? "rgba(100,116,139,0.45)" : "rgba(148,163,184,0.45)"}" stroke-width="1">
+          ${Array.from({ length: 9 }, (_, index) => 30 + index * 30).map((value) => `
+            <line x1="${value}" y1="24" x2="${value}" y2="196"></line>
+            <line x1="24" y1="${value}" x2="336" y2="${value}"></line>
+          `).join("")}
+        </g>
+        <line x1="32" y1="184" x2="328" y2="184" stroke="${darkMode ? "rgba(96,165,250,0.8)" : "rgba(37,99,235,0.8)"}" stroke-width="2"></line>
+        <line x1="56" y1="32" x2="56" y2="188" stroke="${darkMode ? "rgba(96,165,250,0.8)" : "rgba(37,99,235,0.8)"}" stroke-width="2"></line>
+        <path d="M56 184 C110 184, 128 138, 168 132 S234 92, 300 58" fill="none" stroke="${darkMode ? "rgba(96,165,250,0.95)" : "rgba(37,99,235,0.95)"}" stroke-width="4" stroke-linecap="round"></path>
+        <circle cx="120" cy="146" r="7" fill="${darkMode ? "rgba(96,165,250,0.95)" : "rgba(59,130,246,0.95)"}"></circle>
+        <circle cx="184" cy="124" r="7" fill="${darkMode ? "rgba(56,189,248,0.95)" : "rgba(14,165,233,0.95)"}"></circle>
+        <circle cx="244" cy="86" r="7" fill="${darkMode ? "rgba(96,165,250,0.95)" : "rgba(37,99,235,0.95)"}"></circle>
+        <text x="260" y="46" fill="${darkMode ? "rgba(148,163,184,0.95)" : "rgba(71,85,105,0.9)"}" font-size="16" font-family="Inter, sans-serif">y = mx + b</text>
+      </svg>
+    </div>
+  `;
 }
 
 function featureRow(title, text) {
@@ -2445,6 +2734,119 @@ function secondaryButtonClass(extra = "") {
   return `inline-flex items-center justify-center rounded-md border border-border bg-secondary px-4 py-2.5 text-sm font-medium hover:bg-accent ${extra}`.trim();
 }
 
+function initializeTheme() {
+  installThemeStyles();
+  const savedTheme = readTheme();
+  applyTheme(savedTheme || "light");
+}
+
+function toggleTheme() {
+  applyTheme(getTheme() === "dark" ? "light" : "dark");
+}
+
+function applyTheme(theme) {
+  const nextTheme = theme === "dark" ? "dark" : "light";
+  if (nextTheme === "dark") {
+    document.documentElement.classList.add("dark");
+  } else {
+    document.documentElement.classList.remove("dark");
+  }
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  } catch {}
+}
+
+function readTheme() {
+  try {
+    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    return savedTheme === "dark" ? "dark" : savedTheme === "light" ? "light" : "";
+  } catch {
+    return "";
+  }
+}
+
+function getTheme() {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+function installThemeStyles() {
+  if (document.getElementById(THEME_VARS_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = THEME_VARS_STYLE_ID;
+  style.textContent = `
+    :root {
+      --background: 0 0% 99%;
+      --foreground: 222.2 84% 4.9%;
+      --card: 0 0% 100%;
+      --card-foreground: 222.2 84% 4.9%;
+      --popover: 0 0% 100%;
+      --popover-foreground: 222.2 84% 4.9%;
+      --primary: 221.2 83.2% 53.3%;
+      --primary-foreground: 210 40% 98%;
+      --secondary: 214.3 31.8% 91.4%;
+      --secondary-foreground: 222.2 47.4% 11.2%;
+      --muted: 210 40% 96.1%;
+      --muted-foreground: 215.4 16.3% 46.9%;
+      --accent: 210 40% 96.1%;
+      --accent-foreground: 222.2 47.4% 11.2%;
+      --destructive: 0 84.2% 60.2%;
+      --destructive-foreground: 210 40% 98%;
+      --border: 214.3 31.8% 84%;
+      --input: 214.3 31.8% 84%;
+      --ring: 221.2 83.2% 53.3%;
+      --chart-1: 221.2 83.2% 53.3%;
+      --chart-2: 210 70% 55%;
+      --chart-3: 140 60% 45%;
+      --chart-4: 45 90% 55%;
+      --chart-5: 280 70% 55%;
+      --sidebar-background: 0 0% 98%;
+      --sidebar-foreground: 222.2 47.4% 11.2%;
+      --sidebar-primary: 221.2 83.2% 53.3%;
+      --sidebar-primary-foreground: 210 40% 98%;
+      --sidebar-accent: 210 40% 96.1%;
+      --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+      --sidebar-border: 214.3 31.8% 84%;
+      --sidebar-ring: 221.2 83.2% 53.3%;
+    }
+
+    .dark {
+      --background: 0 0% 7%;
+      --foreground: 0 0% 95%;
+      --card: 0 0% 11%;
+      --card-foreground: 0 0% 95%;
+      --popover: 0 0% 11%;
+      --popover-foreground: 0 0% 95%;
+      --primary: 0 90% 55%;
+      --primary-foreground: 0 0% 100%;
+      --secondary: 0 0% 16%;
+      --secondary-foreground: 0 0% 90%;
+      --muted: 0 0% 16%;
+      --muted-foreground: 0 0% 55%;
+      --accent: 0 0% 20%;
+      --accent-foreground: 0 0% 95%;
+      --destructive: 0 62.8% 30.6%;
+      --destructive-foreground: 0 0% 98%;
+      --border: 0 0% 18%;
+      --input: 0 0% 18%;
+      --ring: 0 90% 55%;
+      --chart-1: 0 90% 55%;
+      --chart-2: 210 70% 55%;
+      --chart-3: 140 60% 45%;
+      --chart-4: 45 90% 55%;
+      --chart-5: 280 70% 55%;
+      --sidebar-background: 0 0% 9%;
+      --sidebar-foreground: 0 0% 85%;
+      --sidebar-primary: 0 90% 55%;
+      --sidebar-primary-foreground: 0 0% 100%;
+      --sidebar-accent: 0 0% 14%;
+      --sidebar-accent-foreground: 0 0% 95%;
+      --sidebar-border: 0 0% 16%;
+      --sidebar-ring: 0 90% 55%;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function navIcon(label) {
   const classes = "h-5 w-5 shrink-0";
   switch (label) {
@@ -2478,6 +2880,10 @@ function navIcon(label) {
       return iconVideo(classes);
   }
 }
+
+function iconMoon(classes) { return svgIcon(classes, '<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />'); }
+function iconSun(classes) { return svgIcon(classes, '<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />'); }
+function iconBook(classes) { return svgIcon(classes, '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3Z" />'); }
 
 function renderLiveChatPanel(video) {
   const messages = state.liveChatMessagesByVideo[video.id] || [];
