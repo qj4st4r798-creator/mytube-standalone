@@ -13,10 +13,8 @@ const MAX_JSON_BYTES = Number(process.env.MAX_REQUEST_BYTES || 1024 * 1024 * 10)
 const ROOT = __dirname;
 const ABS_ROOT = path.resolve(ROOT);
 const STORAGE_ROOT = path.resolve(process.env.STORAGE_ROOT || ROOT);
-const UPLOADS_DIR = process.env.UPLOADS_DIR
-  ? path.resolve(process.env.UPLOADS_DIR)
-  : path.join(STORAGE_ROOT, "uploads");
-const ABS_UPLOADS = path.resolve(UPLOADS_DIR);
+const uploadPath = process.env.UPLOAD_PATH || "/uploads";
+const ABS_UPLOADS = path.resolve(uploadPath);
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(STORAGE_ROOT, "data");
@@ -75,16 +73,16 @@ const viewerCounts = new Map();
 const MAX_CHAT_STREAM_HISTORY = 200;
 function ensureDirectories() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
 }
 
 function logStorageConfiguration() {
   console.log(`[storage] root=${STORAGE_ROOT}`);
   console.log(`[storage] data=${DATA_DIR}`);
-  console.log(`[storage] uploads=${UPLOADS_DIR}`);
+  console.log(`[storage] uploads=${uploadPath}`);
   if (process.env.RENDER && STORAGE_ROOT === ABS_ROOT) {
     console.warn(
-      "[storage] Render is using the app directory for storage. Uploads and JSON data will be lost on deploy unless you set STORAGE_ROOT, DATA_DIR, or UPLOADS_DIR to a persistent disk mount path."
+      "[storage] Render is using the app directory for storage. Uploads and JSON data will be lost on deploy unless you set STORAGE_ROOT, DATA_DIR, or UPLOAD_PATH to a persistent disk mount path."
     );
   }
 }
@@ -418,8 +416,8 @@ async function handleApi(req, res, url) {
         return;
       }
 
-      const thumbPath = path.join(UPLOADS_DIR, path.basename(video.thumbnail_url));
-      const videoPath = path.join(UPLOADS_DIR, path.basename(video.video_url));
+      const thumbPath = path.join(uploadPath, path.basename(video.thumbnail_url));
+      const videoPath = path.join(uploadPath, path.basename(video.video_url));
       fs.rm(thumbPath, { force: true }, () => {});
       fs.rm(videoPath, { force: true }, () => {});
 
@@ -742,7 +740,7 @@ function parseMultipart(req) {
       }
 
       const safeName = crypto.randomUUID() + path.extname(filename);
-      const savePath = path.join(UPLOADS_DIR, safeName);
+      const savePath = path.join(uploadPath, safeName);
 
       const out = fs.createWriteStream(savePath);
       file.pipe(out);
@@ -763,7 +761,7 @@ function parseMultipart(req) {
 function removeUploadedFiles(files) {
   for (const key in files) {
     const f = files[key];
-    const p = path.join(UPLOADS_DIR, f.fileName);
+    const p = path.join(uploadPath, f.fileName);
     fs.rm(p, { force: true }, () => {});
   }
 }
@@ -1634,7 +1632,7 @@ function serveStatic(req, res, pathname) {
     targetPath = path.join(ROOT, "index.html");
   } else if (pathname.startsWith("/uploads/")) {
     const relative = pathname.replace(/^\/uploads\//, "");
-    targetPath = path.join(UPLOADS_DIR, normalizeStaticPath(relative));
+    targetPath = path.join(uploadPath, normalizeStaticPath(relative));
   } else {
     targetPath = path.join(ROOT, normalizeStaticPath(pathname));
   }

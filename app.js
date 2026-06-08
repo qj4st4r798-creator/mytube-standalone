@@ -1269,7 +1269,7 @@ function renderEducationHomepage() {
           <div class="flex items-center gap-2">
             ${renderThemeToggleButton()}
             <button class="inline-flex items-center justify-center rounded-md border ${darkMode ? "border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"} px-4 py-2.5 text-sm font-medium" data-route="/login" type="button">
-              Enter MyTube
+              Start Learning
             </button>
           </div>
         </div>
@@ -2354,7 +2354,7 @@ function renderAuthLayout({ title, subtitle, form }) {
                 ${iconShield("h-4 w-4 text-primary")}
                 Local Authentication
               </div>
-              <h1 class="mt-6 text-4xl font-bold text-slate-900 dark:text-white">Welcome to MyTube!</h1>
+              <h1 class="mt-6 text-4xl font-bold text-slate-900 dark:text-white">Welcome to Northstar Math Academy!</h1>
               <p class="mt-4 text-base text-muted-foreground max-w-md">
                 Create an account or sign in to start uploading and watching videos on your own private MyTube instance. Your data is stored locally and never shared with any third parties or teachers 😏😏😏.
               </p>
