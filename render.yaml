@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: northstar-math-academy
+    env: node
+    buildCommand: "npm install"
+    startCommand: "node server.js"
+    plan: starter
+    disk:
+      name: northstar-storage
+      mountPath: /uploads
+      sizeGB: 10

@@ -51,15 +51,7 @@
       "created_at": "2026-04-11T17:36:13.480Z"
     }
   ],
-  "sessions": [
-    {
-      "id": "session_c2d04bef-de38-4a7e-ac29-99799b6ffc8b",
-      "user_id": "user_sjordan",
-      "token_hash": "3f7d0573532242b8d97fdbaec3fc14160e30c6dd273b744ad165b3750403f540",
-      "expires_at": "2026-06-14T18:09:39.798Z",
-      "created_at": "2026-06-07T18:09:39.798Z"
-    }
-  ],
+  "sessions": [],
   "videos": [
     {
       "id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
@@ -93,7 +85,16 @@
       "viewed_at": "2026-04-10T14:38:55.971Z"
     }
   ],
-  "reports": [],
+  "reports": [
+    {
+      "id": "report_dfaf1652-dc71-41e2-b724-eb3e1b694914",
+      "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
+      "user_id": "user_sjordan",
+      "email": "sjordan4076@mytube.co",
+      "reason": "I dont like it",
+      "created_at": "2026-06-07T19:01:09.307Z"
+    }
+  ],
   "subscriptions": [],
   "signals": [],
   "comments": [],
@@ -102,10 +103,10 @@
     {
       "symbol": "mytube.co",
       "display_name": "mytube.co",
-      "price": 0.01,
-      "change": 0,
-      "change_percent": 0,
-      "updated_at": "2026-04-11T16:44:23.092Z",
+      "price": 0.02,
+      "change": 0.01,
+      "change_percent": 100,
+      "updated_at": "2026-06-07T18:56:37.634Z",
       "trend_mode": "fast_growth"
     }
   ]
