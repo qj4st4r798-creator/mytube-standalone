@@ -6,7 +6,6 @@ const crypto = require("crypto");
 const { URL } = require("url");
 const Busboy = require("busboy");
 const cookie = require("cookie");
-const { createClient } = require("@supabase/supabase-js");
 
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
@@ -18,7 +17,7 @@ const uploadPath = process.env.UPLOAD_PATH || (process.env.RENDER ? "/opt/render
 const ABS_UPLOADS = path.resolve(uploadPath);
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const SUPABASE_ANON_KEY = String(process.env.SUPABASE_ANON_KEY || "");
-const SUPABASE_SERVICE_ROLE = String(process.env.SUPABASE_SERVICE_ROLE || "");
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || "");
 const SUPABASE_BUCKET = String(process.env.SUPABASE_BUCKET || "");
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
@@ -115,7 +114,7 @@ async function bootstrap() {
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (isMutationMethod(req.method)) assertSameOrigin(req);
       if (req.method === "POST" && url.pathname === "/upload") {
-        await handleSupabaseUpload(req, res);
+        await handleLocalVideoUpload(req, res);
         return;
       }
       if (url.pathname.startsWith("/api/")) {
@@ -261,56 +260,7 @@ async function handleApi(req, res, url) {
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/videos") {
-    const user = requireUser(req, res);
-    if (!user) return;
-
-    const { fields, files } = await parseMultipart(req);
-    const title = String(fields.title || "").trim();
-    const isLive = toBoolean(fields.is_live);
-    const thumbnailFile = files.thumbnail_file || files.thumbnail || null;
-    const videoFile = files.video_file || files.video || null;
-
-    if (!title) {
-      removeUploadedFiles(files);
-      sendJson(res, 400, { error: "A video title is required." });
-      return;
-    }
-
-    if (!isLive && !videoFile) {
-      removeUploadedFiles(files);
-      sendJson(res, 400, { error: "Please upload a video file." });
-      return;
-    }
-
-    const videoId = createId("video");
-    const thumbnailUrl = thumbnailFile
-      ? await storeUploadAsset(thumbnailFile.fileName, thumbnailFile.mimeType)
-      : "";
-    const videoUrl = videoFile
-      ? await storeUploadAsset(videoFile.fileName, videoFile.mimeType)
-      : "";
-
-    db.videos.push({
-      id: videoId,
-      title,
-      description: String(fields.description || "").trim(),
-      thumbnail_url: thumbnailUrl || (thumbnailFile ? `/uploads/${thumbnailFile.fileName}` : ""),
-      video_url: videoUrl || (videoFile ? `/uploads/${videoFile.fileName}` : ""),
-      current_frame_url: "",
-      channel_name: user.channel_name,
-      owner_id: user.id,
-      category: String(fields.category || "general").trim() || "general",
-      tags_json: JSON.stringify(parseTags(fields.tags)),
-      views: 0,
-      duration: String(fields.duration || "0:00").trim() || "0:00",
-      is_live: isLive,
-      is_music: toBoolean(fields.is_music),
-      created_at: new Date().toISOString(),
-    });
-    persistDataStore();
-
-    persistLegacyVideos();
-    sendJson(res, 201, { video: getVideoById(videoId) });
+    await handleLocalVideoUpload(req, res);
     return;
   }
   if (parts[1] === "videos" && parts[2]) {
@@ -783,131 +733,61 @@ function removeUploadedFiles(files) {
   }
 }
 
-function supabaseConfigured() {
-  return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE && SUPABASE_BUCKET);
-}
-
-function getSupabaseClient() {
-  if (!supabaseConfigured()) {
-    return null;
-  }
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-}
-
-function supabasePublicUrl(fileName) {
-  return `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(SUPABASE_BUCKET)}/${encodeURIComponent(fileName)}`;
-}
-
-function supabaseUploadUrl(fileName) {
-  return `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_BUCKET)}/${encodeURIComponent(fileName)}`;
-}
-
-function uploadFileToSupabase(filePath, fileName, mimeType) {
-  return new Promise((resolve, reject) => {
-    if (!supabaseConfigured()) {
-      reject(new Error("Supabase is not configured."));
-      return;
-    }
-
-    const request = https.request(supabaseUploadUrl(fileName), {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE}`,
-        "Content-Type": mimeType || "application/octet-stream",
-        "x-upsert": "false",
-      },
-    }, (response) => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => {
-        body += chunk;
-      });
-      response.on("end", () => {
-        if (response.statusCode >= 200 && response.statusCode < 300) {
-          resolve({
-            url: supabasePublicUrl(fileName),
-            response: body,
-          });
-          return;
-        }
-        reject(new Error(body || `Supabase upload failed with status ${response.statusCode}.`));
-      });
-    });
-
-    request.on("error", reject);
-
-    const stream = fs.createReadStream(filePath);
-    stream.on("error", reject);
-    stream.pipe(request);
-  });
-}
-
-async function storeUploadAsset(fileName, mimeType) {
-  const localPath = path.join(uploadPath, fileName);
-  if (!supabaseConfigured()) {
-    return "";
-  }
-  const result = await uploadFileToSupabase(localPath, fileName, mimeType);
-  return result.url;
-}
-
-async function handleSupabaseUpload(req, res) {
+async function handleLocalVideoUpload(req, res) {
   const user = requireUser(req, res);
   if (!user) return;
 
   const { fields, files } = await parseMultipart(req);
   const videoFile = files.file || files.video || files.video_file || null;
+  const thumbnailFile = files.thumbnail_file || files.thumbnail || null;
   const title = String(fields.title || req.headers["x-upload-title"] || "").trim();
   const description = String(fields.description || req.headers["x-upload-description"] || "").trim();
-  const thumbnailPath = String(fields.thumbnail_url || req.headers["x-upload-thumbnail"] || "").trim();
   const channelName = String(fields.channel_name || req.headers["x-upload-channel-name"] || user.channel_name || "").trim() || user.channel_name;
+  const category = String(fields.category || "general").trim() || "general";
+  const duration = String(fields.duration || "0:00").trim() || "0:00";
+  const tagsJson = JSON.stringify(parseTags(fields.tags));
+  const isLive = toBoolean(fields.is_live);
 
-  if (!videoFile) {
-    sendJson(res, 400, { error: "No video uploaded" });
-    return;
-  }
   if (!title) {
+    removeUploadedFiles(files);
     sendJson(res, 400, { error: "A video title is required." });
     return;
   }
 
-  try {
-    const filePath = videoFile.fileName;
-    const uploadResult = await uploadFileToSupabase(path.join(uploadPath, filePath), filePath, videoFile.mimeType);
-    const supabase = getSupabaseClient();
-
-    if (!supabase) {
-      sendJson(res, 500, { error: "Supabase is not configured." });
-      return;
-    }
-
-    const { data: newRow, error: insertError } = await supabase.from("videos").insert({
-      owner_id: user.id,
-      title: title,
-      description: description,
-      video_url: filePath,
-      thumbnail_url: thumbnailPath,
-      channel_name: channelName,
-      is_public: true
-    }).select().single();
-
-    if (insertError) {
-      console.error(insertError);
-      sendJson(res, 500, { error: "Database insert failed." });
-      return;
-    }
-
-    sendJson(res, 201, { video: newRow, url: uploadResult.url });
-  } catch (err) {
-    console.error(err);
-    sendJson(res, 500, { error: "Upload failed" });
+  if (!isLive && !videoFile) {
+    removeUploadedFiles(files);
+    sendJson(res, 400, { error: "Please upload a video file." });
+    return;
   }
+
+  console.log("UPLOAD REMOVED");
+
+  const videoId = createId("video");
+  const thumbnailUrl = thumbnailFile ? `/uploads/${thumbnailFile.fileName}` : String(fields.thumbnail_url || req.headers["x-upload-thumbnail"] || "").trim();
+  const videoUrl = videoFile ? `/uploads/${videoFile.fileName}` : "";
+  const row = {
+    id: videoId,
+    title,
+    description,
+    thumbnail_url: thumbnailUrl,
+    video_url: videoUrl,
+    current_frame_url: "",
+    channel_name: channelName,
+    owner_id: user.id,
+    category,
+    tags_json: tagsJson,
+    views: 0,
+    duration,
+    is_live: isLive,
+    is_music: toBoolean(fields.is_music),
+    created_at: new Date().toISOString(),
+  };
+
+  db.videos.push(row);
+  console.log("DB INSERT REMOVED");
+  persistDataStore();
+  persistLegacyVideos();
+  sendJson(res, 201, { video: getVideoById(videoId) });
 }
 
 function requireUser(req, res) {
