@@ -7,5 +7,5 @@ services:
     plan: starter
     disk:
       name: northstar-storage
-      mountPath: /uploads
+      mountPath: /opt/render/project/src/uploads
       sizeGB: 10
