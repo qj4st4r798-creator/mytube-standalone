@@ -5,11 +5,13 @@
   "description": "Standalone MyTube website with local JSON auth, uploads, moderation, live camera broadcasting, and stock quotes.",
   "dependencies": {
     "busboy": "^1.6.0",
-    "cookie": "^0.7.2"
+    "cookie": "^0.7.2",
+    "@supabase/supabase-js": "^2.57.4"
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check app.js"
+    "check": "node --check server.js && node --check app.js",
+    "import:users": "node scripts/importUsersToSupabase.js"
   },
   "engines": {
     "node": ">=16"
