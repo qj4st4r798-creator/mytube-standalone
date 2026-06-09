@@ -493,6 +493,7 @@ async function createVideo(formData) {
     const multipart = new FormData();
     multipart.set("title", String(formData.get("title") || "").trim());
     multipart.set("description", String(formData.get("description") || "").trim());
+    multipart.set("channel_name", state.user?.channel_name || "");
     multipart.set("category", isFinancial ? "stock" : String(formData.get("category") || "general"));
     multipart.set("tags", normalizedTags);
     multipart.set("duration", String(formData.get("duration") || "0:00"));
@@ -504,14 +505,20 @@ async function createVideo(formData) {
       multipart.set("thumbnail_file", thumbnailFile);
     }
     if (!isLive && videoFile && videoFile.size) {
-      multipart.set("video_file", videoFile);
+      multipart.set("file", videoFile);
     }
 
-    const payload = await api("/api/videos", {
-      method: "POST",
-      body: multipart,
-      formData: true,
-    });
+    const payload = isLive
+      ? await api("/api/videos", {
+          method: "POST",
+          body: multipart,
+          formData: true,
+        })
+      : await api("/upload", {
+          method: "POST",
+          body: multipart,
+          formData: true,
+        });
 
     if (isLive) {
       try {
@@ -523,8 +530,19 @@ async function createVideo(formData) {
       }
     }
 
+    if (!isLive) {
+      const uploadedVideo = payload.video || payload.row || payload.data || null;
+      if (!uploadedVideo) {
+        throw new Error("Upload succeeded, but no video record was returned.");
+      }
+      state.videos = [uploadedVideo, ...state.videos.filter((video) => video.id !== uploadedVideo.id)];
+      state.notice = "Video uploaded.";
+      setRoute(`/watch/${uploadedVideo.id}`);
+      return;
+    }
+
     await refreshAppData();
-    state.notice = isLive ? "Live stream created." : "Video uploaded.";
+    state.notice = "Live stream created.";
     setRoute(`/watch/${payload.video.id}`);
     } catch (error) {
       state.error = error.message;

@@ -746,7 +746,7 @@ function parseMultipart(req) {
       const { filename, mimeType } = info;
       const extension = path.extname(filename || "").toLowerCase();
       const isThumbnail = name === "thumbnail_file";
-      const isMedia = name === "video_file" || name === "video";
+      const isMedia = name === "video_file" || name === "video" || name === "file";
       const mediaLooksValid = isMedia && (ALLOWED_VIDEO_TYPES.has(mimeType) || [".mp4", ".webm", ".mov", ".mp3"].includes(extension));
       const imageLooksValid = isThumbnail && (ALLOWED_IMAGE_TYPES.has(mimeType) || [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension));
 
@@ -862,7 +862,7 @@ async function handleSupabaseUpload(req, res) {
   if (!user) return;
 
   const { fields, files } = await parseMultipart(req);
-  const videoFile = files.video || files.video_file || null;
+  const videoFile = files.file || files.video || files.video_file || null;
   const title = String(fields.title || req.headers["x-upload-title"] || "").trim();
   const description = String(fields.description || req.headers["x-upload-description"] || "").trim();
   const thumbnailPath = String(fields.thumbnail_url || req.headers["x-upload-thumbnail"] || "").trim();
