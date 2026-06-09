@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const { URL } = require("url");
 const Busboy = require("busboy");
 const cookie = require("cookie");
+const { createClient } = require("@supabase/supabase-js");
 
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 7);
@@ -786,6 +787,18 @@ function supabaseConfigured() {
   return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE && SUPABASE_BUCKET);
 }
 
+function getSupabaseClient() {
+  if (!supabaseConfigured()) {
+    return null;
+  }
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
+
 function supabasePublicUrl(fileName) {
   return `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(SUPABASE_BUCKET)}/${encodeURIComponent(fileName)}`;
 }
@@ -845,18 +858,52 @@ async function storeUploadAsset(fileName, mimeType) {
 }
 
 async function handleSupabaseUpload(req, res) {
-  const { files } = await parseMultipart(req);
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const { fields, files } = await parseMultipart(req);
   const videoFile = files.video || files.video_file || null;
+  const title = String(fields.title || req.headers["x-upload-title"] || "").trim();
+  const description = String(fields.description || req.headers["x-upload-description"] || "").trim();
+  const thumbnailPath = String(fields.thumbnail_url || req.headers["x-upload-thumbnail"] || "").trim();
+  const channelName = String(fields.channel_name || req.headers["x-upload-channel-name"] || user.channel_name || "").trim() || user.channel_name;
+
   if (!videoFile) {
     sendJson(res, 400, { error: "No video uploaded" });
     return;
   }
+  if (!title) {
+    sendJson(res, 400, { error: "A video title is required." });
+    return;
+  }
 
   try {
-    const url = supabaseConfigured()
-      ? (await uploadFileToSupabase(path.join(uploadPath, videoFile.fileName), videoFile.fileName, videoFile.mimeType)).url
-      : `/uploads/${videoFile.fileName}`;
-    sendJson(res, 200, { url });
+    const filePath = videoFile.fileName;
+    const uploadResult = await uploadFileToSupabase(path.join(uploadPath, filePath), filePath, videoFile.mimeType);
+    const supabase = getSupabaseClient();
+
+    if (!supabase) {
+      sendJson(res, 500, { error: "Supabase is not configured." });
+      return;
+    }
+
+    const { data: newRow, error: insertError } = await supabase.from("videos").insert({
+      owner_id: user.id,
+      title: title,
+      description: description,
+      video_url: filePath,
+      thumbnail_url: thumbnailPath,
+      channel_name: channelName,
+      is_public: true
+    }).select().single();
+
+    if (insertError) {
+      console.error(insertError);
+      sendJson(res, 500, { error: "Database insert failed." });
+      return;
+    }
+
+    sendJson(res, 201, { video: newRow, url: uploadResult.url });
   } catch (err) {
     console.error(err);
     sendJson(res, 500, { error: "Upload failed" });
