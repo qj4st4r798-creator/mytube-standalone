@@ -15,6 +15,10 @@ const ABS_ROOT = path.resolve(ROOT);
 const STORAGE_ROOT = path.resolve(process.env.STORAGE_ROOT || ROOT);
 const uploadPath = process.env.UPLOAD_PATH || (process.env.RENDER ? "/uploads" : path.join(STORAGE_ROOT, "uploads"));
 const ABS_UPLOADS = path.resolve(uploadPath);
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_ANON_KEY = String(process.env.SUPABASE_ANON_KEY || "");
+const SUPABASE_SERVICE_ROLE = String(process.env.SUPABASE_SERVICE_ROLE || "");
+const SUPABASE_BUCKET = String(process.env.SUPABASE_BUCKET || "");
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(STORAGE_ROOT, "data");
@@ -109,6 +113,10 @@ async function bootstrap() {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (isMutationMethod(req.method)) assertSameOrigin(req);
+      if (req.method === "POST" && url.pathname === "/upload") {
+        await handleSupabaseUpload(req, res);
+        return;
+      }
       if (url.pathname.startsWith("/api/")) {
         await handleApi(req, res, url);
         return;
@@ -258,6 +266,8 @@ async function handleApi(req, res, url) {
     const { fields, files } = await parseMultipart(req);
     const title = String(fields.title || "").trim();
     const isLive = toBoolean(fields.is_live);
+    const thumbnailFile = files.thumbnail_file || files.thumbnail || null;
+    const videoFile = files.video_file || files.video || null;
 
     if (!title) {
       removeUploadedFiles(files);
@@ -265,20 +275,26 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (!isLive && !files.video_file) {
+    if (!isLive && !videoFile) {
       removeUploadedFiles(files);
       sendJson(res, 400, { error: "Please upload a video file." });
       return;
     }
 
     const videoId = createId("video");
+    const thumbnailUrl = thumbnailFile
+      ? await storeUploadAsset(thumbnailFile.fileName, thumbnailFile.mimeType)
+      : "";
+    const videoUrl = videoFile
+      ? await storeUploadAsset(videoFile.fileName, videoFile.mimeType)
+      : "";
 
     db.videos.push({
       id: videoId,
       title,
       description: String(fields.description || "").trim(),
-      thumbnail_url: files.thumbnail_file ? `/uploads/${files.thumbnail_file.fileName}` : "",
-      video_url: files.video_file ? `/uploads/${files.video_file.fileName}` : "",
+      thumbnail_url: thumbnailUrl || (thumbnailFile ? `/uploads/${thumbnailFile.fileName}` : ""),
+      video_url: videoUrl || (videoFile ? `/uploads/${videoFile.fileName}` : ""),
       current_frame_url: "",
       channel_name: user.channel_name,
       owner_id: user.id,
@@ -729,7 +745,7 @@ function parseMultipart(req) {
       const { filename, mimeType } = info;
       const extension = path.extname(filename || "").toLowerCase();
       const isThumbnail = name === "thumbnail_file";
-      const isMedia = name === "video_file";
+      const isMedia = name === "video_file" || name === "video";
       const mediaLooksValid = isMedia && (ALLOWED_VIDEO_TYPES.has(mimeType) || [".mp4", ".webm", ".mov", ".mp3"].includes(extension));
       const imageLooksValid = isThumbnail && (ALLOWED_IMAGE_TYPES.has(mimeType) || [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension));
 
@@ -763,6 +779,87 @@ function removeUploadedFiles(files) {
     const f = files[key];
     const p = path.join(uploadPath, f.fileName);
     fs.rm(p, { force: true }, () => {});
+  }
+}
+
+function supabaseConfigured() {
+  return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE && SUPABASE_BUCKET);
+}
+
+function supabasePublicUrl(fileName) {
+  return `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(SUPABASE_BUCKET)}/${encodeURIComponent(fileName)}`;
+}
+
+function supabaseUploadUrl(fileName) {
+  return `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_BUCKET)}/${encodeURIComponent(fileName)}`;
+}
+
+function uploadFileToSupabase(filePath, fileName, mimeType) {
+  return new Promise((resolve, reject) => {
+    if (!supabaseConfigured()) {
+      reject(new Error("Supabase is not configured."));
+      return;
+    }
+
+    const request = https.request(supabaseUploadUrl(fileName), {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE}`,
+        "Content-Type": mimeType || "application/octet-stream",
+        "x-upsert": "false",
+      },
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          resolve({
+            url: supabasePublicUrl(fileName),
+            response: body,
+          });
+          return;
+        }
+        reject(new Error(body || `Supabase upload failed with status ${response.statusCode}.`));
+      });
+    });
+
+    request.on("error", reject);
+
+    const stream = fs.createReadStream(filePath);
+    stream.on("error", reject);
+    stream.pipe(request);
+  });
+}
+
+async function storeUploadAsset(fileName, mimeType) {
+  const localPath = path.join(uploadPath, fileName);
+  if (!supabaseConfigured()) {
+    return "";
+  }
+  const result = await uploadFileToSupabase(localPath, fileName, mimeType);
+  return result.url;
+}
+
+async function handleSupabaseUpload(req, res) {
+  const { files } = await parseMultipart(req);
+  const videoFile = files.video || files.video_file || null;
+  if (!videoFile) {
+    sendJson(res, 400, { error: "No video uploaded" });
+    return;
+  }
+
+  try {
+    const url = supabaseConfigured()
+      ? (await uploadFileToSupabase(path.join(uploadPath, videoFile.fileName), videoFile.fileName, videoFile.mimeType)).url
+      : `/uploads/${videoFile.fileName}`;
+    sendJson(res, 200, { url });
+  } catch (err) {
+    console.error(err);
+    sendJson(res, 500, { error: "Upload failed" });
   }
 }
 
