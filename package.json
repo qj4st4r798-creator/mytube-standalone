@@ -4,9 +4,11 @@
   "private": true,
   "description": "Standalone MyTube website with local JSON auth, uploads, moderation, live camera broadcasting, and stock quotes.",
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
     "busboy": "^1.6.0",
     "cookie": "^0.7.2",
-    "@supabase/supabase-js": "^2.57.4"
+    "dotenv": "^17.4.2",
+    "ws": "^8.21.0"
   },
   "scripts": {
     "start": "node server.js",

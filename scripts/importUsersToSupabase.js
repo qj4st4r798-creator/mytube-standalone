@@ -1,10 +1,14 @@
+require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
 
+// ✅ Always use the correct file in /data
 const sourcePath = process.argv[2]
   ? path.resolve(process.argv[2])
-  : path.join(__dirname, "sourceUsers.json");
+  : path.resolve(__dirname, "../data/users.json");
+
+console.log("Loading JSON from:", sourcePath);
 
 async function main() {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -75,6 +79,8 @@ async function main() {
 
     console.log(`Imported ${email} -> ${authUserId}`);
   }
+
+  console.log("✅ Import complete!");
 }
 
 main().catch((error) => {
