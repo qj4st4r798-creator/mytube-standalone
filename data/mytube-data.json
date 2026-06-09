@@ -51,7 +51,15 @@
       "created_at": "2026-04-11T17:36:13.480Z"
     }
   ],
-  "sessions": [],
+  "sessions": [
+    {
+      "id": "session_f1f05c64-4e11-45d3-aa2d-5d446d1f828b",
+      "user_id": "user_sjordan",
+      "token_hash": "f51baa5c9633252b0cf4d7ca36031fd2614be322e6bddf3ab4744353c90ad864",
+      "expires_at": "2026-06-15T23:59:03.989Z",
+      "created_at": "2026-06-08T23:59:03.989Z"
+    }
+  ],
   "videos": [
     {
       "id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
