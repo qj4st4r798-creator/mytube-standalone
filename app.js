@@ -3,6 +3,7 @@ const root = document.getElementById("root");
 const state = {
   user: null,
   videos: [],
+  shorts: [],
   stocks: [],
   stockHistoryBySymbol: {},
   stocksUpdatedAt: "",
@@ -66,6 +67,10 @@ const routeTable = [
   { name: "live", pattern: "/live" },
   { name: "stock", pattern: "/stock" },
   { name: "sports", pattern: "/sports" },
+  { name: "shorts", pattern: "/shorts" },
+  { name: "shorts-upload", pattern: "/shorts/upload" },
+  { name: "profile-settings", pattern: "/profile-settings" },
+  { name: "edit-channel", pattern: "/edit-channel" },
   { name: "admin", pattern: "/admin" },
   { name: "liked", pattern: "/liked" },
   { name: "history", pattern: "/history" },
@@ -105,6 +110,7 @@ const sidebarSections = [
       { label: "MyTube Live", route: "/live" },
       { label: "MyTube Stock", route: "/stock" },
       { label: "MyTube Sports", route: "/sports" },
+      { label: "MyTube Shorts", route: "/shorts" },
     ],
   },
 ];
@@ -161,6 +167,7 @@ document.addEventListener("click", async (event) => {
     } catch {}
     state.user = null;
     state.videos = [];
+    state.shorts = [];
     state.notice = "You have been logged out.";
     state.route = parseRoute();
     setRoute("/");
@@ -236,6 +243,24 @@ document.addEventListener("submit", async (event) => {
   if (form.matches("[data-signup-form]")) {
     event.preventDefault();
     await signup(new FormData(form));
+    return;
+  }
+
+  if (form.matches("[data-profile-settings-form]")) {
+    event.preventDefault();
+    await updateProfileSettings(new FormData(form));
+    return;
+  }
+
+  if (form.matches("[data-edit-channel-form]")) {
+    event.preventDefault();
+    await updateChannelSettings(new FormData(form));
+    return;
+  }
+
+  if (form.matches("[data-shorts-upload-form]")) {
+    event.preventDefault();
+    await createShort(new FormData(form));
     return;
   }
 
@@ -379,19 +404,20 @@ async function api(path, options = {}) {
 async function refreshAppData() {
   state.loading = true;
   render();
-  const hadUser = Boolean(state.user);
 
   try {
-    const [user, videosResponse] = await Promise.all([api("/api/me"), api("/api/videos")]);
+    const user = await api("/api/me");
     state.user = user;
-    state.videos = videosResponse.videos || [];
     state.error = "";
+
+    const [videosResponse, shortsResponse] = await Promise.allSettled([api("/api/videos"), api("/api/shorts")]);
+    state.videos = videosResponse.status === "fulfilled" ? (videosResponse.value.videos || []) : [];
+    state.shorts = shortsResponse.status === "fulfilled" ? (shortsResponse.value.shorts || []) : [];
   } catch (error) {
     state.user = null;
     state.videos = [];
-    if (hadUser) {
-      state.error = error.message;
-    }
+    state.shorts = [];
+    state.error = error.message;
   } finally {
     state.loading = false;
   }
@@ -436,9 +462,12 @@ async function login(formData) {
       },
     });
 
-    await refreshAppData();
+    state.user = payload.user || state.user;
+    const [videosResponse, shortsResponse] = await Promise.allSettled([api("/api/videos"), api("/api/shorts")]);
+    state.videos = videosResponse.status === "fulfilled" ? (videosResponse.value.videos || []) : state.videos;
+    state.shorts = shortsResponse.status === "fulfilled" ? (shortsResponse.value.shorts || []) : state.shorts;
     state.notice = "Signed in successfully.";
-    setRoute("/");
+    setRoute("/channel");
   } catch (error) {
     state.error = error.message;
   } finally {
@@ -455,21 +484,121 @@ async function signup(formData) {
   try {
     const payload = await api("/api/signup", {
       method: "POST",
-      body: {
-        full_name: String(formData.get("full_name") || "").trim(),
-        email: String(formData.get("email") || "").trim(),
-        password: String(formData.get("password") || ""),
-        channel_name: String(formData.get("channel_name") || "").trim(),
-      },
+      body: formData,
+      formData: true,
     });
 
-    await refreshAppData();
+    state.user = payload.user || state.user;
+    const [videosResponse, shortsResponse] = await Promise.allSettled([api("/api/videos"), api("/api/shorts")]);
+    state.videos = videosResponse.status === "fulfilled" ? (videosResponse.value.videos || []) : state.videos;
+    state.shorts = shortsResponse.status === "fulfilled" ? (shortsResponse.value.shorts || []) : state.shorts;
     state.notice = "Account created.";
-    setRoute("/");
+    setRoute("/channel");
   } catch (error) {
     state.error = error.message;
   } finally {
     state.authLoading = false;
+    render();
+  }
+}
+
+async function createShort(formData) {
+  state.uploadLoading = true;
+  state.error = "";
+  render();
+
+  try {
+    const multipart = new FormData();
+    multipart.set("title", String(formData.get("title") || "").trim());
+    multipart.set("video_file", formData.get("video_file"));
+    const thumbnailFile = formData.get("thumbnail_file");
+    if (thumbnailFile && thumbnailFile.size) {
+      multipart.set("thumbnail_file", thumbnailFile);
+    }
+
+    const payload = await api("/api/shorts", {
+      method: "POST",
+      body: multipart,
+      formData: true,
+    });
+
+    const uploadedShort = payload.short || payload.data || null;
+    if (!uploadedShort) {
+      throw new Error("Short upload succeeded, but no short record was returned.");
+    }
+
+    state.shorts = [uploadedShort, ...state.shorts.filter((short) => short.id !== uploadedShort.id)];
+    state.notice = "Short uploaded.";
+    setRoute("/shorts");
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    state.uploadLoading = false;
+    render();
+  }
+}
+
+async function updateProfileSettings(formData) {
+  state.uploadLoading = true;
+  state.error = "";
+  render();
+
+  try {
+    const multipart = new FormData();
+    const profilePictureFile = formData.get("profile_picture_file");
+    if (profilePictureFile && profilePictureFile.size) {
+      multipart.set("profile_picture_file", profilePictureFile);
+    }
+
+    const payload = await api("/api/me/profile", {
+      method: "POST",
+      body: multipart,
+      formData: true,
+    });
+
+    state.user = payload.user || state.user;
+    await refreshAppData();
+    state.notice = "Profile picture updated.";
+    setRoute("/profile");
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    state.uploadLoading = false;
+    render();
+  }
+}
+
+async function updateChannelSettings(formData) {
+  state.uploadLoading = true;
+  state.error = "";
+  render();
+
+  try {
+    const multipart = new FormData();
+    const channelPictureFile = formData.get("channel_picture_file");
+    const channelBannerFile = formData.get("channel_banner_file");
+    if (channelPictureFile && channelPictureFile.size) {
+      multipart.set("channel_picture_file", channelPictureFile);
+    }
+    if (channelBannerFile && channelBannerFile.size) {
+      multipart.set("channel_banner_file", channelBannerFile);
+    }
+    multipart.set("channel_description", String(formData.get("channel_description") || "").trim());
+
+    const payload = await api("/api/me/channel", {
+      method: "POST",
+      body: multipart,
+      formData: true,
+    });
+
+    state.user = payload.user || state.user;
+    await refreshAppData();
+    state.notice = "Channel updated.";
+    setRoute("/channel");
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    state.uploadLoading = false;
     render();
   }
 }
@@ -1487,6 +1616,20 @@ function renderPublicPage() {
             <label class="text-sm font-medium">Password</label>
             <input class="${inputClass()}" type="password" name="password" placeholder="Create a password" required />
           </div>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div>
+              <label class="text-sm font-medium">Profile Picture</label>
+              <input class="${inputClass()}" type="file" name="profile_picture_file" accept="image/*" />
+            </div>
+            <div>
+              <label class="text-sm font-medium">Channel Picture</label>
+              <input class="${inputClass()}" type="file" name="channel_picture_file" accept="image/*" />
+            </div>
+          </div>
+          <div>
+            <label class="text-sm font-medium">Channel Banner</label>
+            <input class="${inputClass()}" type="file" name="channel_banner_file" accept="image/*" />
+          </div>
           ${renderMessage()}
           <button class="${primaryButtonClass("w-full")}" type="submit" ${state.authLoading ? "disabled" : ""}>
             ${state.authLoading ? "Creating account..." : "Create Account"}
@@ -1556,6 +1699,11 @@ function renderHeader() {
         <span class="font-bold text-lg hidden sm:inline">MyTube</span>
       </button>
 
+      <button class="hidden lg:inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-accent" data-route="/shorts" type="button">
+        ${iconShorts("h-4 w-4")}
+        Shorts
+      </button>
+
       <form data-search-form class="hidden md:flex flex-1 max-w-xl mx-auto">
         <div class="flex w-full">
           <input class="${inputClass("rounded-r-none")}" name="query" placeholder="Search videos..." value="${escapeHtml(state.route.query.q || state.searchInput)}" />
@@ -1567,15 +1715,13 @@ function renderHeader() {
 
       <div class="flex-1 md:hidden"></div>
       ${renderThemeToggleButton()}
-      <div class="hidden sm:flex items-center gap-3 rounded-full bg-secondary px-3 py-1.5">
-        <div class="h-8 w-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-semibold text-sm">
-          ${escapeHtml((state.user.full_name || state.user.email || "U").charAt(0).toUpperCase())}
-        </div>
+      <button class="hidden sm:flex items-center gap-3 rounded-full bg-secondary px-3 py-1.5 hover:bg-accent" data-route="/profile" type="button">
+        ${renderChannelAvatar(state.user, "h-8 w-8", "text-sm")}
         <div class="text-left">
           <p class="text-sm font-medium leading-none">${escapeHtml(state.user.full_name || "User")}</p>
           <p class="text-xs text-muted-foreground mt-1">${escapeHtml(state.user.email)}</p>
         </div>
-      </div>
+      </button>
       ${state.user.role === "admin" ? `<button class="${secondaryButtonClass()}" data-route="/admin">Admin</button>` : ""}
       <button class="${secondaryButtonClass()}" data-action="logout">Logout</button>
     </header>
@@ -1651,8 +1797,14 @@ function renderPage() {
       return renderUploadPage(false);
     case "go-live":
       return renderUploadPage(true);
+    case "shorts-upload":
+      return renderShortsUploadPage();
     case "profile":
       return renderProfilePage();
+    case "profile-settings":
+      return renderProfileSettingsPage();
+    case "edit-channel":
+      return renderEditChannelPage();
     case "channel":
       return renderChannelPage(state.user.channel_name);
     case "channel-detail":
@@ -1674,6 +1826,8 @@ function renderPage() {
       return renderStockPage();
     case "sports":
       return renderSportsPage();
+    case "shorts":
+      return renderShortsFeedPage();
     case "liked":
       return renderFeedPage(
         "Liked Videos",
@@ -1858,6 +2012,205 @@ function renderSportsPage() {
   );
 }
 
+function renderShortsFeedPage() {
+  return `
+    <div class="max-w-[1800px] mx-auto p-4 md:p-8">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">MyTube Shorts</p>
+          <h1 class="text-3xl font-bold">Shorts</h1>
+          <p class="text-muted-foreground mt-2">Vertical videos that autoplay as you scroll through the feed.</p>
+        </div>
+        <div class="flex gap-3">
+          <button class="${secondaryButtonClass()}" data-route="/shorts/upload">${iconUpload("h-4 w-4 mr-2")}Upload Short</button>
+          <button class="${secondaryButtonClass()}" data-action="refresh-data">${iconRefresh("h-4 w-4 mr-2")}Refresh</button>
+        </div>
+      </div>
+      ${state.shorts.length
+        ? `<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div class="space-y-6 max-h-[calc(100vh-8rem)] overflow-y-auto snap-y snap-mandatory pr-2">
+              ${state.shorts.map((short) => renderShortsFeedCard(short)).join("")}
+            </div>
+            <aside class="space-y-4">
+              <div class="rounded-3xl border border-border bg-card p-5">
+                <h2 class="text-lg font-semibold">Create a Short</h2>
+                <p class="mt-2 text-sm text-muted-foreground">Upload a vertical 9:16 video to the Shorts collection without affecting normal uploads.</p>
+                <button class="${primaryButtonClass("mt-4")}" data-route="/shorts/upload">Start Upload</button>
+              </div>
+              <div class="rounded-3xl border border-border bg-card p-5">
+                <h2 class="text-lg font-semibold">Shorts Tips</h2>
+                <ul class="mt-3 space-y-2 text-sm text-muted-foreground list-disc pl-5">
+                  <li>Keep the framing vertical for best playback.</li>
+                  <li>Use a short title so it stays readable on mobile.</li>
+                  <li>Muted autoplay works best with looped clips.</li>
+                </ul>
+              </div>
+            </aside>
+          </div>`
+        : renderEmptyState("No Shorts yet", "Be the first to upload a vertical short video to MyTube Shorts.")}
+    </div>
+  `;
+}
+
+function renderShortsFeedCard(short) {
+  const author = short.user || {};
+  const title = escapeHtml(short.title || "Untitled Short");
+  const channelName = escapeHtml(author.channel_name || "MyTube user");
+  const shortUrl = escapeAttr(short.videoUrl || "");
+  const thumbUrl = escapeAttr(short.thumbnailUrl || "");
+  return `
+    <article class="snap-start rounded-[2rem] border border-border bg-card p-4 md:p-5 shadow-sm">
+      <div class="relative mx-auto w-full max-w-[420px] overflow-hidden rounded-[1.75rem] bg-black aspect-[9/16]">
+        <video
+          class="short-player h-full w-full object-cover"
+          src="${shortUrl}"
+          ${thumbUrl ? `poster="${thumbUrl}"` : ""}
+          autoplay
+          muted
+          loop
+          playsinline
+          controls
+          preload="metadata"
+        ></video>
+        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent pointer-events-none"></div>
+        <div class="absolute inset-x-0 bottom-0 p-4 md:p-5 flex items-end justify-between gap-4">
+          <div class="min-w-0">
+            <p class="text-xs uppercase tracking-[0.25em] text-white/60">Shorts</p>
+            <h2 class="mt-2 text-lg md:text-xl font-semibold text-white line-clamp-2">${title}</h2>
+            <button class="mt-3 flex items-center gap-2 text-left" data-route="/channel/${encodeURIComponent(author.channel_name || state.user.channel_name)}">
+              ${renderChannelAvatar(author, "h-9 w-9", "text-xs", "ring-2 ring-white/20")}
+              <span class="min-w-0">
+                <span class="block text-sm font-medium text-white">${escapeHtml(author.full_name || author.channel_name || "Creator")}</span>
+                <span class="block text-xs text-white/70">${channelName}</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderShortsUploadPage() {
+  return `
+    <div class="max-w-3xl mx-auto p-4 md:p-8">
+      <div class="flex items-center gap-3 mb-8">
+        <div class="p-2 bg-primary/10 rounded-xl">${iconShorts("h-6 w-6 text-primary")}</div>
+        <div>
+          <h1 class="text-2xl font-bold">Upload a Short</h1>
+          <p class="text-sm text-muted-foreground">Post a vertical 9:16 video to the MyTube Shorts feed.</p>
+        </div>
+      </div>
+
+      <form data-shorts-upload-form class="space-y-5 rounded-3xl border border-border bg-card p-6">
+        <div>
+          <label class="text-sm font-medium">Title</label>
+          <input class="${inputClass()}" name="title" placeholder="Short title" required />
+        </div>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div>
+            <label class="text-sm font-medium">Short Video</label>
+            <input class="${inputClass()}" type="file" name="video_file" accept="video/mp4,video/webm,video/quicktime,.mov" required />
+          </div>
+          <div>
+            <label class="text-sm font-medium">Thumbnail</label>
+            <input class="${inputClass()}" type="file" name="thumbnail_file" accept="image/*" />
+          </div>
+        </div>
+        <div class="rounded-2xl border border-border bg-background/60 p-4 text-sm text-muted-foreground">
+          Shorts are designed for vertical clips. Best results come from a 9:16 video that is short, punchy, and easy to watch on mobile.
+        </div>
+        ${renderMessage()}
+        <div class="flex flex-wrap gap-3">
+          <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
+            ${state.uploadLoading ? "Uploading..." : "Upload Short"}
+          </button>
+          <button class="${secondaryButtonClass()}" data-route="/shorts" type="button">Back to Shorts</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function renderProfileSettingsPage() {
+  return `
+    <div class="max-w-3xl mx-auto p-4 md:p-8">
+      <div class="flex items-center gap-3 mb-8">
+        <div class="p-2 bg-primary/10 rounded-xl">${iconUser("h-6 w-6 text-primary")}</div>
+        <div>
+          <h1 class="text-2xl font-bold">Profile Settings</h1>
+          <p class="text-sm text-muted-foreground">Upload or change your profile picture.</p>
+        </div>
+      </div>
+
+      <form data-profile-settings-form class="space-y-5 rounded-3xl border border-border bg-card p-6">
+        <div class="flex items-center gap-4">
+          ${renderUserAvatar(state.user, "h-20 w-20", "text-2xl")}
+          <div>
+            <p class="text-sm text-muted-foreground">Current avatar</p>
+            <p class="text-base font-medium">${escapeHtml(state.user.full_name || state.user.channel_name || state.user.email)}</p>
+          </div>
+        </div>
+        <div>
+          <label class="text-sm font-medium">Profile Picture</label>
+          <input class="${inputClass()}" type="file" name="profile_picture_file" accept="image/*" />
+        </div>
+        ${renderMessage()}
+        <div class="flex flex-wrap gap-3">
+          <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
+            ${state.uploadLoading ? "Saving..." : "Save Profile Picture"}
+          </button>
+          <button class="${secondaryButtonClass()}" data-route="/profile" type="button">Back to Profile</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+function renderEditChannelPage() {
+  return `
+    <div class="max-w-4xl mx-auto p-4 md:p-8">
+      <div class="flex items-center gap-3 mb-8">
+        <div class="p-2 bg-primary/10 rounded-xl">${iconVideo("h-6 w-6 text-primary")}</div>
+        <div>
+          <h1 class="text-2xl font-bold">Edit Channel</h1>
+          <p class="text-sm text-muted-foreground">Update your channel banner, profile picture, and description.</p>
+        </div>
+      </div>
+
+      <form data-edit-channel-form class="space-y-5 rounded-3xl border border-border bg-card p-6">
+        <div class="rounded-3xl border border-border overflow-hidden">
+          ${renderChannelBanner(state.user, "h-56")}
+          <div class="relative px-6 pb-6">
+            <div class="-mt-12">${renderChannelAvatar(state.user, "h-24 w-24", "text-2xl", "ring-4 ring-card")}</div>
+          </div>
+        </div>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div>
+            <label class="text-sm font-medium">Channel Picture</label>
+            <input class="${inputClass()}" type="file" name="channel_picture_file" accept="image/*" />
+          </div>
+          <div>
+            <label class="text-sm font-medium">Channel Banner</label>
+            <input class="${inputClass()}" type="file" name="channel_banner_file" accept="image/*" />
+          </div>
+        </div>
+        <div>
+          <label class="text-sm font-medium">Channel Description</label>
+          <textarea class="${textareaClass()}" name="channel_description" placeholder="Tell viewers what your channel is about">${escapeHtml(state.user.channelDescription || "")}</textarea>
+        </div>
+        ${renderMessage()}
+        <div class="flex flex-wrap gap-3">
+          <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
+            ${state.uploadLoading ? "Saving..." : "Save Channel"}
+          </button>
+          <button class="${secondaryButtonClass()}" data-route="/channel" type="button">Back to Channel</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
 function renderWatchPage() {
   const video = state.videos.find((entry) => entry.id === state.route.params.id);
   if (!video) {
@@ -1870,6 +2223,11 @@ function renderWatchPage() {
   const isOwnChannel = state.user.channel_name === video.channel_name;
   const liveFrame = state.liveFrameByVideo[video.id] || video.current_frame_url;
   const isAudioTrack = isAudioUpload(video.video_url);
+  const owner = {
+    channel_name: video.channel_name,
+    full_name: video.ownerFullName || video.channel_name,
+    channelPictureUrl: video.ownerChannelPictureUrl || "",
+  };
   const isSportsVideo = Boolean(video.is_sports || video.category === "sports" || (Array.isArray(video.tags) && video.tags.includes("sports")));
   const contentLabel = video.is_music
     ? "MyTube Music"
@@ -1915,7 +2273,10 @@ function renderWatchPage() {
           </div>
           <h1 class="mt-5 text-2xl md:text-3xl font-bold">${escapeHtml(video.title)}</h1>
           <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-            <span>${escapeHtml(video.channel_name)}</span>
+            <button class="inline-flex items-center gap-2 hover:text-foreground" data-route="/channel/${encodeURIComponent(video.channel_name)}">
+              ${renderChannelAvatar(owner, "h-8 w-8", "text-xs")}
+              <span>${escapeHtml(video.channel_name)}</span>
+            </button>
             <span>${formatCount(video.views)} views</span>
             <span>${formatCount(video.likes)} likes</span>
             <span>${escapeHtml(video.duration || "0:00")}</span>
@@ -2140,9 +2501,7 @@ function renderProfilePage() {
       <div class="rounded-3xl border border-border bg-card p-6 md:p-8">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div class="flex items-center gap-4">
-            <div class="h-24 w-24 rounded-full bg-primary/20 flex items-center justify-center text-3xl font-bold text-primary">
-              ${escapeHtml((state.user.full_name || state.user.email || "U").charAt(0).toUpperCase())}
-            </div>
+            ${renderUserAvatar(state.user, "h-24 w-24", "text-3xl")}
             <div>
               <h1 class="text-3xl font-bold">${escapeHtml(state.user.full_name || "Profile")}</h1>
               <p class="text-muted-foreground mt-2">${escapeHtml(state.user.email)}</p>
@@ -2152,7 +2511,10 @@ function renderProfilePage() {
           </div>
           <div class="flex flex-wrap gap-3">
             <button class="${secondaryButtonClass()}" data-route="/channel">${iconUser("h-4 w-4 mr-2")}My Channel</button>
+            <button class="${secondaryButtonClass()}" data-route="/profile-settings">${iconUser("h-4 w-4 mr-2")}Profile Settings</button>
+            <button class="${secondaryButtonClass()}" data-route="/edit-channel">${iconVideo("h-4 w-4 mr-2")}Edit Channel</button>
             <button class="${secondaryButtonClass()}" data-route="/upload">${iconUpload("h-4 w-4 mr-2")}Upload</button>
+            <button class="${secondaryButtonClass()}" data-route="/shorts/upload">${iconShorts("h-4 w-4 mr-2")}Upload Short</button>
             ${state.user.role === "admin" ? `<button class="${primaryButtonClass()}" data-route="/admin">${iconShield("h-4 w-4 mr-2")}Admin Panel</button>` : ""}
           </div>
         </div>
@@ -2178,26 +2540,43 @@ function renderChannelPage(channelName) {
   const isOwnChannel = decoded === state.user.channel_name;
   const isSubscribed = (state.user.subscribed_channels || []).includes(decoded);
   const totalViews = videos.reduce((sum, video) => sum + Number(video.views || 0), 0);
+  const owner = isOwnChannel
+    ? state.user
+    : videos.find((video) => video.ownerChannelPictureUrl || video.ownerFullName || video.ownerChannelBannerUrl) || null;
+  const channelUser = isOwnChannel
+    ? state.user
+    : {
+        channel_name: decoded,
+        full_name: owner?.ownerFullName || decoded,
+        channelPictureUrl: owner?.ownerChannelPictureUrl || "",
+        channelBannerUrl: owner?.ownerChannelBannerUrl || "",
+        channelDescription: owner?.ownerChannelDescription || "",
+      };
 
   return `
     <div class="max-w-[1800px] mx-auto p-4 md:p-8">
-      <div class="rounded-3xl border border-border bg-card p-6 md:p-8">
-        <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div class="flex items-center gap-4">
-            <div class="h-20 w-20 rounded-full bg-primary/20 flex items-center justify-center text-2xl font-bold text-primary">
-              ${escapeHtml((decoded || "C").charAt(0).toUpperCase())}
+      <section class="rounded-3xl border border-border bg-card overflow-hidden">
+        ${renderChannelBanner(channelUser, "h-64")}
+        <div class="relative px-6 pb-6">
+          <div class="-mt-16 flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+            <div class="flex items-end gap-4">
+              ${renderChannelAvatar(channelUser, "h-32 w-32", "text-4xl", "ring-4 ring-card")}
+              <div class="pb-2">
+                <h1 class="text-3xl font-bold">${escapeHtml(channelUser.full_name || decoded)}</h1>
+                <p class="text-muted-foreground mt-2">${videos.length} videos • ${formatCount(totalViews)} total views</p>
+                <p class="text-sm text-muted-foreground mt-1">${escapeHtml(channelUser.channelDescription || "No channel description yet.")}</p>
+              </div>
             </div>
-            <div>
-              <h1 class="text-3xl font-bold">${escapeHtml(decoded)}</h1>
-              <p class="text-muted-foreground mt-2">${videos.length} videos • ${formatCount(totalViews)} total views</p>
+            <div class="flex flex-wrap gap-3 md:pb-2">
+              ${isOwnChannel ? `<button class="${primaryButtonClass()}" data-route="/edit-channel">${iconVideo("h-4 w-4 mr-2")}Edit Channel</button>` : ""}
+              ${isOwnChannel ? `<button class="${secondaryButtonClass()}" data-route="/profile-settings">${iconUser("h-4 w-4 mr-2")}Profile Settings</button>` : ""}
+              ${isOwnChannel ? `<button class="${secondaryButtonClass()}" data-route="/shorts/upload">${iconShorts("h-4 w-4 mr-2")}Upload Short</button>` : ""}
+              ${isOwnChannel ? `<button class="${secondaryButtonClass()}" data-route="/upload">${iconUpload("h-4 w-4 mr-2")}Upload</button>` : ""}
+              ${!isOwnChannel ? `<button class="${secondaryButtonClass()}" data-action="subscribe-channel" data-channel-name="${escapeAttr(decoded)}">${iconUsers("h-4 w-4 mr-2")} ${isSubscribed ? "Unsubscribe" : "Subscribe"}</button>` : ""}
             </div>
-          </div>
-          <div class="flex gap-3">
-            ${isOwnChannel ? `<button class="${primaryButtonClass()}" data-route="/upload">${iconUpload("h-4 w-4 mr-2")}Upload</button>` : ""}
-            ${!isOwnChannel ? `<button class="${secondaryButtonClass()}" data-action="subscribe-channel" data-channel-name="${escapeAttr(decoded)}">${iconUsers("h-4 w-4 mr-2")} ${isSubscribed ? "Unsubscribe" : "Subscribe"}</button>` : ""}
           </div>
         </div>
-      </div>
+      </section>
       <div class="mt-8">
         ${renderVideoGrid(videos, "This channel has no videos yet.")}
       </div>
@@ -2303,6 +2682,11 @@ function renderVideoCard(video) {
   const isLiked = (state.user.liked_video_ids || []).includes(video.id);
   const isSubscribed = (state.user.subscribed_channels || []).includes(video.channel_name);
   const isOwnChannel = state.user.channel_name === video.channel_name;
+  const owner = {
+    channel_name: video.channel_name,
+    full_name: video.ownerFullName || video.channel_name,
+    channelPictureUrl: video.ownerChannelPictureUrl || "",
+  };
 
   return `
     <article class="group rounded-3xl border border-border bg-card overflow-hidden">
@@ -2319,8 +2703,8 @@ function renderVideoCard(video) {
       </button>
       <div class="p-4">
         <div class="flex gap-3">
-          <button class="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center text-sm font-semibold text-primary shrink-0" data-route="/channel/${encodeURIComponent(video.channel_name)}">
-            ${escapeHtml((video.channel_name || "C").charAt(0).toUpperCase())}
+          <button class="shrink-0" data-route="/channel/${encodeURIComponent(video.channel_name)}">
+            ${renderChannelAvatar(owner, "h-10 w-10", "text-sm")}
           </button>
           <div class="min-w-0 flex-1">
             <button class="text-left w-full" data-route="/watch/${video.id}">
@@ -2355,6 +2739,11 @@ function renderVideoCard(video) {
 }
 
 function renderCompactVideoCard(video) {
+  const owner = {
+    channel_name: video.channel_name,
+    full_name: video.ownerFullName || video.channel_name,
+    channelPictureUrl: video.ownerChannelPictureUrl || "",
+  };
   return `
     <button class="w-full rounded-2xl border border-border bg-card p-3 text-left hover:bg-accent/30" data-route="/watch/${video.id}">
       <div class="flex gap-3">
@@ -2368,8 +2757,13 @@ function renderCompactVideoCard(video) {
           }
         </div>
         <div class="min-w-0">
-          <h3 class="font-medium line-clamp-2">${escapeHtml(video.title)}</h3>
-          <p class="text-sm text-muted-foreground mt-1">${escapeHtml(video.channel_name)}</p>
+          <div class="flex items-center gap-2">
+            ${renderChannelAvatar(owner, "h-8 w-8", "text-xs")}
+            <div class="min-w-0">
+              <h3 class="font-medium line-clamp-2">${escapeHtml(video.title)}</h3>
+              <p class="text-sm text-muted-foreground mt-1">${escapeHtml(video.channel_name)}</p>
+            </div>
+          </div>
           <p class="text-xs text-muted-foreground mt-1">${formatCount(video.views)} views</p>
         </div>
       </div>
@@ -2937,6 +3331,8 @@ function navIcon(label) {
       return iconStock(classes);
     case "MyTube Sports":
       return iconSports(classes);
+    case "MyTube Shorts":
+      return iconShorts(classes);
     case "Admin Panel":
       return iconShield(classes);
     default:
@@ -2980,16 +3376,22 @@ function renderLiveChatPanel(video) {
 }
 
 function renderLiveChatMessage(message) {
+  const author = {
+    channel_name: message.channel_name || "",
+    full_name: message.full_name || message.channel_name || "User",
+    profilePictureUrl: message.profilePictureUrl || "",
+  };
   const label = escapeHtml(message.channel_name || message.full_name || "User");
   const text = escapeHtml(message.message || "");
   const timeStamp = message.created_at ? new Date(message.created_at).toLocaleTimeString() : "";
   return `
     <div class="flex items-start gap-3 text-sm">
-      <div class="flex flex-col gap-0.5">
+      ${renderUserAvatar(author, "h-9 w-9", "text-xs", "shrink-0")}
+      <div class="flex flex-1 flex-col gap-0.5">
         <span class="font-semibold text-primary">${label}</span>
         <span class="text-xs text-muted-foreground">${escapeHtml(timeStamp)}</span>
+        <p class="text-sm text-foreground">${text}</p>
       </div>
-      <p class="text-sm text-foreground">${text}</p>
     </div>
   `;
 }
@@ -3027,12 +3429,20 @@ function renderCommentRow(comment, videoId) {
   const body = escapeHtml(comment.content || "");
   const timestamp = comment.created_at ? new Date(comment.created_at).toLocaleString() : "";
   const canDelete = state.user && (state.user.role === "admin" || state.user.id === comment.user_id);
+  const avatar = {
+    channel_name: comment.channel_name || "",
+    full_name: comment.full_name || comment.channel_name || "User",
+    profilePictureUrl: comment.profilePictureUrl || "",
+  };
   return `
     <div class="rounded-2xl border border-border/50 bg-background/60 p-4 text-sm text-foreground">
       <div class="flex justify-between gap-3">
-        <div>
+        <div class="flex items-start gap-3">
+          ${renderUserAvatar(avatar, "h-10 w-10", "text-xs", "shrink-0")}
+          <div>
           <p class="font-semibold text-foreground">${author}</p>
           <p class="text-xs text-muted-foreground">${escapeHtml(timestamp)}</p>
+          </div>
         </div>
         ${canDelete ? `<button class="${secondaryButtonClass("text-xs")}" data-action="delete-comment" data-video-id="${videoId}" data-comment-id="${comment.id}">Delete</button>` : ""}
       </div>
@@ -3052,6 +3462,71 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function userDisplayName(user) {
+  return String(user?.full_name || user?.fullName || user?.channel_name || user?.email || "U").trim() || "U";
+}
+
+function userAvatarUrl(user) {
+  return String(user?.profilePictureUrl || user?.profile_picture_url || "").trim();
+}
+
+function channelAvatarUrl(user) {
+  return String(user?.channelPictureUrl || user?.channel_picture_url || user?.profilePictureUrl || user?.profile_picture_url || "").trim();
+}
+
+function channelBannerUrl(user) {
+  return String(user?.channelBannerUrl || user?.channel_banner_url || "").trim();
+}
+
+function userInitial(user) {
+  return userDisplayName(user).charAt(0).toUpperCase() || "U";
+}
+
+function renderUserAvatar(user, sizeClass = "h-10 w-10", textClass = "text-sm", extraClass = "") {
+  const label = userDisplayName(user);
+  const url = userAvatarUrl(user);
+  const className = `${sizeClass} rounded-full overflow-hidden bg-primary/20 flex items-center justify-center text-primary font-semibold ${textClass} ${extraClass}`.trim();
+  if (url) {
+    return `<div class="${className}"><img src="${escapeAttr(url)}" alt="${escapeAttr(label)}" class="h-full w-full object-cover" /></div>`;
+  }
+  return `<div class="${className}">${escapeHtml(userInitial(user))}</div>`;
+}
+
+function renderChannelAvatar(user, sizeClass = "h-10 w-10", textClass = "text-sm", extraClass = "") {
+  const label = userDisplayName(user);
+  const url = channelAvatarUrl(user);
+  const className = `${sizeClass} rounded-full overflow-hidden bg-primary/20 flex items-center justify-center text-primary font-semibold ${textClass} ${extraClass}`.trim();
+  if (url) {
+    return `<div class="${className}"><img src="${escapeAttr(url)}" alt="${escapeAttr(label)}" class="h-full w-full object-cover" /></div>`;
+  }
+  return `<div class="${className}">${escapeHtml(userInitial(user))}</div>`;
+}
+
+function renderChannelBanner(user, heightClass = "h-56") {
+  const url = channelBannerUrl(user);
+  const label = userDisplayName(user);
+  if (url) {
+    return `
+      <div class="relative ${heightClass} overflow-hidden bg-secondary">
+        <img src="${escapeAttr(url)}" alt="${escapeAttr(label)} channel banner" class="h-full w-full object-cover" />
+        <div class="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent"></div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="relative ${heightClass} overflow-hidden bg-gradient-to-r from-primary/35 via-secondary to-background">
+      <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.18),transparent_30%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.12),transparent_35%)]"></div>
+      <div class="absolute inset-0 flex items-end justify-between px-6 py-5">
+        <div>
+          <p class="text-xs uppercase tracking-[0.35em] text-white/65">MyTube Channel</p>
+          <p class="mt-2 text-lg font-semibold text-white">${escapeHtml(label)}</p>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function svgIcon(classes, pathMarkup) {
@@ -3078,5 +3553,6 @@ function iconLive(classes) { return svgIcon(classes, '<rect x="3" y="7" width="1
 function iconBroadcast(classes) { return svgIcon(classes, '<path d="M2 12h2m16 0h2M12 2v2m0 16v2" /><circle cx="12" cy="12" r="3" /><path d="M5.6 5.6A9 9 0 0 0 3 12a9 9 0 0 0 2.6 6.4M18.4 5.6A9 9 0 0 1 21 12a9 9 0 0 1-2.6 6.4" />'); }
 function iconStock(classes) { return svgIcon(classes, '<path d="M4 18 10 12l4 4 6-8" /><path d="M14 8h6v6" />'); }
 function iconSports(classes) { return svgIcon(classes, '<path d="M7 14a5 5 0 1 0 10 0 5 5 0 0 0-10 0Z" /><path d="M12 9V5" /><path d="M9.5 11.2 6.5 8.2" /><path d="M14.5 11.2 17.5 8.2" /><path d="M7.5 17.2 5 19.7" /><path d="M16.5 17.2 19 19.7" />'); }
+function iconShorts(classes) { return svgIcon(classes, '<path d="M8 4h8l-1.5 4H12l3 4-3 4h2.5L16 20H8l1.5-4H12l-3-4 3-4H9.5L8 4Z" />'); }
 function iconFlag(classes) { return svgIcon(classes, '<path d="M5 21V5" /><path d="M5 5c5-2 9 2 14 0v8c-5 2-9-2-14 0" />'); }
 function iconTrash(classes) { return svgIcon(classes, '<path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" />'); }
