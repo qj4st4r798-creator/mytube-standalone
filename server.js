@@ -747,6 +747,7 @@ async function handleLocalVideoUpload(req, res) {
   const duration = String(fields.duration || "0:00").trim() || "0:00";
   const tagsJson = JSON.stringify(parseTags(fields.tags));
   const isLive = toBoolean(fields.is_live);
+  const isSports = toBoolean(fields.is_sports);
 
   if (!title) {
     removeUploadedFiles(files);
@@ -780,6 +781,7 @@ async function handleLocalVideoUpload(req, res) {
     duration,
     is_live: isLive,
     is_music: toBoolean(fields.is_music),
+    is_sports: isSports,
     created_at: new Date().toISOString(),
   };
 
@@ -1019,6 +1021,7 @@ function normalizeDataStore(raw) {
     duration: video.duration || "0:00",
     is_live: Boolean(video.is_live),
     is_music: Boolean(video.is_music),
+    is_sports: Boolean(video.is_sports),
     created_at: video.created_at || new Date().toISOString(),
   }));
   next.likes = next.likes.map((like) => ({
@@ -1329,6 +1332,7 @@ function migrateLegacyJsonData() {
           duration: v.duration || "0:00",
           is_live: Boolean(v.is_live),
           is_music: Boolean(v.is_music),
+          is_sports: Boolean(v.is_sports),
           created_at: v.created_at || new Date().toISOString(),
         });
       }
@@ -1369,6 +1373,7 @@ function persistLegacyVideos() {
     duration: video.duration,
     is_live: Boolean(video.is_live),
     is_music: Boolean(video.is_music),
+    is_sports: Boolean(video.is_sports),
     created_at: video.created_at,
   }));
   fs.writeFileSync(LEGACY_VIDEOS_FILE, JSON.stringify(videos, null, 2));
