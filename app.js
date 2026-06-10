@@ -65,6 +65,7 @@ const routeTable = [
   { name: "music", pattern: "/music" },
   { name: "live", pattern: "/live" },
   { name: "stock", pattern: "/stock" },
+  { name: "sports", pattern: "/sports" },
   { name: "admin", pattern: "/admin" },
   { name: "liked", pattern: "/liked" },
   { name: "history", pattern: "/history" },
@@ -103,6 +104,7 @@ const sidebarSections = [
       { label: "MyTube Music", route: "/music" },
       { label: "MyTube Live", route: "/live" },
       { label: "MyTube Stock", route: "/stock" },
+      { label: "MyTube Sports", route: "/sports" },
     ],
   },
 ];
@@ -481,10 +483,12 @@ async function createVideo(formData) {
     const isLive = String(formData.get("is_live") || "").toLowerCase() === "true" || formData.get("is_live") === "on";
     const isMusic = formData.get("is_music") === "on";
     const isFinancial = formData.get("is_financial") === "on";
+    const isSports = formData.get("is_sports") === "on";
     const rawTags = String(formData.get("tags") || "");
     const normalizedTags = Array.from(new Set([
       ...rawTags.split(",").map((tag) => tag.trim()).filter(Boolean),
       ...(isFinancial ? ["stock", "finance"] : []),
+      ...(isSports ? ["sports", "athletics"] : []),
     ])).join(", ");
     if (isLive && !runtime.cameraStream) {
       throw new Error("Enable your camera before starting a live broadcast.");
@@ -494,11 +498,12 @@ async function createVideo(formData) {
     multipart.set("title", String(formData.get("title") || "").trim());
     multipart.set("description", String(formData.get("description") || "").trim());
     multipart.set("channel_name", state.user?.channel_name || "");
-    multipart.set("category", isFinancial ? "stock" : String(formData.get("category") || "general"));
+    multipart.set("category", isFinancial ? "stock" : isSports ? "sports" : String(formData.get("category") || "general"));
     multipart.set("tags", normalizedTags);
     multipart.set("duration", String(formData.get("duration") || "0:00"));
     multipart.set("is_live", isLive ? "true" : "false");
     multipart.set("is_music", isMusic ? "true" : "false");
+    multipart.set("is_sports", isSports ? "true" : "false");
     const thumbnailFile = formData.get("thumbnail_file");
     const videoFile = formData.get("video_file");
     if (thumbnailFile && thumbnailFile.size) {
@@ -1667,6 +1672,8 @@ function renderPage() {
       );
     case "stock":
       return renderStockPage();
+    case "sports":
+      return renderSportsPage();
     case "liked":
       return renderFeedPage(
         "Liked Videos",
@@ -1833,6 +1840,24 @@ function renderStockPage() {
   `;
 }
 
+function renderSportsPage() {
+  const sportsVideos = state.videos.filter((video) => {
+    const tags = Array.isArray(video.tags) ? video.tags : [];
+    return Boolean(video.is_sports || video.category === "sports" || tags.includes("sports"));
+  });
+
+  return renderFeedPage(
+    "MyTube Sports",
+    "Sports uploads from your local platform.",
+    sportsVideos,
+    {
+      createRoute: "/upload?category=sports",
+      createLabel: "Upload Sports",
+      emptyText: "No sports uploads yet. Post a sports video to populate this page.",
+    },
+  );
+}
+
 function renderWatchPage() {
   const video = state.videos.find((entry) => entry.id === state.route.params.id);
   if (!video) {
@@ -1845,6 +1870,14 @@ function renderWatchPage() {
   const isOwnChannel = state.user.channel_name === video.channel_name;
   const liveFrame = state.liveFrameByVideo[video.id] || video.current_frame_url;
   const isAudioTrack = isAudioUpload(video.video_url);
+  const isSportsVideo = Boolean(video.is_sports || video.category === "sports" || (Array.isArray(video.tags) && video.tags.includes("sports")));
+  const contentLabel = video.is_music
+    ? "MyTube Music"
+    : isSportsVideo
+      ? "MyTube Sports"
+      : video.category === "stock"
+        ? "MyTube Stock"
+        : "";
 
   return `
     <div class="p-4 md:p-6 max-w-[1800px] mx-auto">
@@ -1864,9 +1897,9 @@ function renderWatchPage() {
       : video.video_url
         ? (isAudioTrack
             ? `<div class="h-full w-full bg-black text-white flex flex-col justify-center p-6 md:p-10">
-                ${video.thumbnail_url ? `<img class="mx-auto h-48 w-48 rounded-3xl object-cover shadow-2xl" src="${escapeAttr(video.thumbnail_url)}" alt="${escapeAttr(video.title)}" />` : `<div class="mx-auto h-48 w-48 rounded-3xl bg-white/10 flex items-center justify-center">${iconMusic("h-20 w-20 text-white/75")}</div>`}
+                ${video.thumbnail_url ? `<img class="mx-auto h-48 w-48 rounded-3xl object-cover shadow-2xl" src="${escapeAttr(video.thumbnail_url)}" alt="${escapeAttr(video.title)}" />` : `<div class="mx-auto h-48 w-48 rounded-3xl bg-white/10 flex items-center justify-center">${isSportsVideo ? iconSports("h-20 w-20 text-white/75") : iconMusic("h-20 w-20 text-white/75")}</div>`}
                 <div class="mx-auto mt-8 w-full max-w-2xl">
-                  <p class="text-center text-sm uppercase tracking-[0.25em] text-white/60">MyTube Music</p>
+                  ${contentLabel ? `<p class="text-center text-sm uppercase tracking-[0.25em] text-white/60">${escapeHtml(contentLabel)}</p>` : ""}
                   <h2 class="mt-3 text-center text-2xl font-bold">${escapeHtml(video.title)}</h2>
                   <p class="mt-2 text-center text-white/70">${escapeHtml(video.channel_name)}</p>
                   <audio class="mt-6 w-full" src="${escapeAttr(video.video_url)}" controls preload="metadata"></audio>
@@ -1886,6 +1919,7 @@ function renderWatchPage() {
             <span>${formatCount(video.views)} views</span>
             <span>${formatCount(video.likes)} likes</span>
             <span>${escapeHtml(video.duration || "0:00")}</span>
+            ${contentLabel ? `<span class="rounded-full bg-secondary px-3 py-1 text-xs text-secondary-foreground">${escapeHtml(contentLabel)}</span>` : ""}
             ${video.is_live ? `<span class="rounded-full bg-red-500/15 px-3 py-1 text-xs text-red-300">LIVE</span>` : ""}
             ${video.is_live ? `<span class="rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">${formatCount(state.liveViewerCounts[video.id] || 0)} viewing</span>` : ""}
           </div>
@@ -1932,6 +1966,7 @@ function renderWatchPage() {
 }
 
 function renderUploadPage(isLive) {
+  const defaultCategory = String(state.route.query.category || (isLive ? "news" : "general")).trim() || (isLive ? "news" : "general");
   if (isLive) {
     return `
       <div class="max-w-4xl mx-auto p-4 md:p-8">
@@ -1976,8 +2011,8 @@ function renderUploadPage(isLive) {
               <div>
                 <label class="text-sm font-medium">Category</label>
                 <select class="${inputClass()}" name="category">
-                  ${["news", "gaming", "music", "tech", "education", "general", "stock"]
-                    .map((category) => `<option value="${category}" ${category === "news" ? "selected" : ""}>${capitalize(category)}</option>`)
+                  ${["news", "gaming", "music", "sports", "tech", "education", "general", "stock"]
+                    .map((category) => `<option value="${category}" ${category === defaultCategory ? "selected" : ""}>${capitalize(category)}</option>`)
                     .join("")}
                 </select>
               </div>
@@ -1998,6 +2033,10 @@ function renderUploadPage(isLive) {
               <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
                 <input type="checkbox" name="is_financial" />
                 Financial video
+              </label>
+              <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <input type="checkbox" name="is_sports" />
+                Sports content
               </label>
             </div>
             ${renderMessage()}
@@ -2048,7 +2087,7 @@ function renderUploadPage(isLive) {
             <label class="text-sm font-medium">Category</label>
             <select class="${inputClass()}" name="category">
               ${["general", "music", "gaming", "education", "entertainment", "sports", "news", "tech", "stock"]
-                .map((category) => `<option value="${category}" ${isLive && category === "news" ? "selected" : ""}>${capitalize(category)}</option>`)
+                .map((category) => `<option value="${category}" ${category === defaultCategory ? "selected" : ""}>${capitalize(category)}</option>`)
                 .join("")}
             </select>
           </div>
@@ -2065,6 +2104,10 @@ function renderUploadPage(isLive) {
           <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
             <input type="checkbox" name="is_financial" />
             Financial video
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <input type="checkbox" name="is_sports" />
+            Sports content
           </label>
         </div>
         ${renderMessage()}
@@ -2892,6 +2935,8 @@ function navIcon(label) {
       return iconBroadcast(classes);
     case "MyTube Stock":
       return iconStock(classes);
+    case "MyTube Sports":
+      return iconSports(classes);
     case "Admin Panel":
       return iconShield(classes);
     default:
@@ -3032,5 +3077,6 @@ function iconMusic(classes) { return svgIcon(classes, '<path d="M9 18V5l10-2v13"
 function iconLive(classes) { return svgIcon(classes, '<rect x="3" y="7" width="12" height="10" rx="2" /><path d="m16 10 5-3v10l-5-3" /><circle cx="8" cy="12" r="1.5" />'); }
 function iconBroadcast(classes) { return svgIcon(classes, '<path d="M2 12h2m16 0h2M12 2v2m0 16v2" /><circle cx="12" cy="12" r="3" /><path d="M5.6 5.6A9 9 0 0 0 3 12a9 9 0 0 0 2.6 6.4M18.4 5.6A9 9 0 0 1 21 12a9 9 0 0 1-2.6 6.4" />'); }
 function iconStock(classes) { return svgIcon(classes, '<path d="M4 18 10 12l4 4 6-8" /><path d="M14 8h6v6" />'); }
+function iconSports(classes) { return svgIcon(classes, '<path d="M7 14a5 5 0 1 0 10 0 5 5 0 0 0-10 0Z" /><path d="M12 9V5" /><path d="M9.5 11.2 6.5 8.2" /><path d="M14.5 11.2 17.5 8.2" /><path d="M7.5 17.2 5 19.7" /><path d="M16.5 17.2 19 19.7" />'); }
 function iconFlag(classes) { return svgIcon(classes, '<path d="M5 21V5" /><path d="M5 5c5-2 9 2 14 0v8c-5 2-9-2-14 0" />'); }
 function iconTrash(classes) { return svgIcon(classes, '<path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /><path d="M10 11v6M14 11v6" />'); }
