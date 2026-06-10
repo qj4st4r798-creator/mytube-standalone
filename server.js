@@ -178,29 +178,44 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/signup") {
-    const body = await readJson(req);
+    const contentType = String(req.headers["content-type"] || "");
+    let fields = {};
+    let files = {};
+    if (contentType.includes("multipart/form-data")) {
+      ({ fields, files } = await parseMultipart(req));
+    } else {
+      fields = await readJson(req);
+    }
     if (!consumeRateLimit(`signup:${clientIp(req)}`, MAX_SIGNUP_ATTEMPTS, AUTH_WINDOW_MS)) {
       sendJson(res, 429, { error: "Too many signup attempts." });
       return;
     }
-    const email = String(body.email||"").trim().toLowerCase();
-    const password = String(body.password||"");
-    const fullName = String(body.full_name||"").trim();
-    const channelName = slugFromText(body.channel_name || fullName || email.split("@")[0]);
+    const email = String(fields.email || "").trim().toLowerCase();
+    const password = String(fields.password || "");
+    const fullName = String(fields.full_name || "").trim();
+    const channelName = slugFromText(fields.channel_name || fullName || email.split("@")[0]);
+    const profilePictureUrl = files.profile_picture_file ? `/uploads/${files.profile_picture_file.fileName}` : "";
+    const channelPictureUrl = files.channel_picture_file ? `/uploads/${files.channel_picture_file.fileName}` : "";
+    const channelBannerUrl = files.channel_banner_file ? `/uploads/${files.channel_banner_file.fileName}` : "";
+    const channelDescription = String(fields.channel_description || "").trim();
 
     if (!email || !password || !fullName) {
+      removeUploadedFiles(files);
       sendJson(res, 400, { error: "Missing fields." });
       return;
     }
     if (password.length < 8) {
+      removeUploadedFiles(files);
       sendJson(res, 400, { error: "Password too short." });
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      removeUploadedFiles(files);
       sendJson(res, 400, { error: "Invalid email." });
       return;
     }
     if (findUserByEmail(email)) {
+      removeUploadedFiles(files);
       sendJson(res, 409, { error: "Email already exists." });
       return;
     }
@@ -216,6 +231,10 @@ async function handleApi(req, res, url) {
       role: "user",
       password_hash: pass.hash,
       password_salt: pass.salt,
+      profilePictureUrl,
+      channelPictureUrl,
+      channelBannerUrl,
+      channelDescription,
       created_at: new Date().toISOString(),
     });
     persistDataStore();
@@ -234,10 +253,100 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/me/profile") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { fields, files } = await parseMultipart(req);
+    const profilePictureFile = files.profile_picture_file || null;
+    if (!profilePictureFile) {
+      sendJson(res, 400, { error: "Please upload a profile picture." });
+      return;
+    }
+    removeUploadedAsset(user.profilePictureUrl);
+    user.profilePictureUrl = `/uploads/${profilePictureFile.fileName}`;
+    if (fields.profile_picture_url) {
+      user.profilePictureUrl = String(fields.profile_picture_url).trim();
+    }
+    persistDataStore();
+    persistLegacyUsers();
+    sendJson(res, 200, { user: publicUser(user.id) });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/me/channel") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { fields, files } = await parseMultipart(req);
+    const channelPictureFile = files.channel_picture_file || null;
+    const channelBannerFile = files.channel_banner_file || null;
+    const channelDescription = String(fields.channel_description || "").trim();
+    const hasUpdate = Boolean(channelPictureFile || channelBannerFile || fields.channel_description !== undefined);
+    if (!hasUpdate) {
+      sendJson(res, 400, { error: "No channel updates were provided." });
+      return;
+    }
+    if (channelPictureFile) {
+      removeUploadedAsset(user.channelPictureUrl);
+      user.channelPictureUrl = `/uploads/${channelPictureFile.fileName}`;
+    }
+    if (channelBannerFile) {
+      removeUploadedAsset(user.channelBannerUrl);
+      user.channelBannerUrl = `/uploads/${channelBannerFile.fileName}`;
+    }
+    if (fields.channel_description !== undefined) {
+      user.channelDescription = channelDescription;
+    }
+    persistDataStore();
+    persistLegacyUsers();
+    sendJson(res, 200, { user: publicUser(user.id) });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/videos") {
     const user = requireUser(req, res);
     if (!user) return;
     sendJson(res, 200, { videos: listVideos() });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/shorts") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, { shorts: listShorts() });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/shorts") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const { fields, files } = await parseMultipart(req);
+    const title = String(fields.title || "").trim();
+    const videoFile = files.video_file || files.video || files.file || null;
+    const thumbnailFile = files.thumbnail_file || files.thumbnail || null;
+
+    if (!title) {
+      removeUploadedFiles(files);
+      sendJson(res, 400, { error: "A short title is required." });
+      return;
+    }
+    if (!videoFile) {
+      removeUploadedFiles(files);
+      sendJson(res, 400, { error: "Please upload a short video file." });
+      return;
+    }
+
+    const shortId = createId("short");
+    const record = {
+      id: shortId,
+      userId: user.id,
+      videoUrl: `/uploads/${videoFile.fileName}`,
+      thumbnailUrl: thumbnailFile ? `/uploads/${thumbnailFile.fileName}` : "",
+      title,
+      createdAt: new Date().toISOString(),
+    };
+    db.shorts.push(record);
+    persistDataStore();
+    sendJson(res, 201, { short: listShorts().find((short) => short.id === shortId) || record });
     return;
   }
 
@@ -695,7 +804,11 @@ function parseMultipart(req) {
     busboy.on("file", (name, file, info) => {
       const { filename, mimeType } = info;
       const extension = path.extname(filename || "").toLowerCase();
-      const isThumbnail = name === "thumbnail_file";
+      const isThumbnail =
+        name === "thumbnail_file" ||
+        name === "profile_picture_file" ||
+        name === "channel_picture_file" ||
+        name === "channel_banner_file";
       const isMedia = name === "video_file" || name === "video" || name === "file";
       const mediaLooksValid = isMedia && (ALLOWED_VIDEO_TYPES.has(mimeType) || [".mp4", ".webm", ".mov", ".mp3"].includes(extension));
       const imageLooksValid = isThumbnail && (ALLOWED_IMAGE_TYPES.has(mimeType) || [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension));
@@ -731,6 +844,13 @@ function removeUploadedFiles(files) {
     const p = path.join(uploadPath, f.fileName);
     fs.rm(p, { force: true }, () => {});
   }
+}
+
+function removeUploadedAsset(url) {
+  const value = String(url || "").trim();
+  if (!value.startsWith("/uploads/")) return;
+  const p = path.join(uploadPath, path.basename(value));
+  fs.rm(p, { force: true }, () => {});
 }
 
 async function handleLocalVideoUpload(req, res) {
@@ -956,6 +1076,7 @@ function createEmptyDataStore() {
     users: [],
     sessions: [],
     videos: [],
+    shorts: [],
     likes: [],
     history: [],
     reports: [],
@@ -997,6 +1118,10 @@ function normalizeDataStore(raw) {
     role: user.role || "user",
     password_hash: user.password_hash || "",
     password_salt: user.password_salt || "",
+    profilePictureUrl: user.profilePictureUrl || user.profile_picture_url || "",
+    channelPictureUrl: user.channelPictureUrl || user.channel_picture_url || "",
+    channelBannerUrl: user.channelBannerUrl || user.channel_banner_url || "",
+    channelDescription: user.channelDescription || user.channel_description || "",
     created_at: user.created_at || new Date().toISOString(),
   }));
   next.sessions = next.sessions.map((session) => ({
@@ -1023,6 +1148,14 @@ function normalizeDataStore(raw) {
     is_music: Boolean(video.is_music),
     is_sports: Boolean(video.is_sports),
     created_at: video.created_at || new Date().toISOString(),
+  }));
+  next.shorts = next.shorts.map((short) => ({
+    id: short.id,
+    userId: short.userId || short.user_id || "",
+    videoUrl: short.videoUrl || short.video_url || "",
+    thumbnailUrl: short.thumbnailUrl || short.thumbnail_url || "",
+    title: short.title || "",
+    createdAt: short.createdAt || short.created_at || new Date().toISOString(),
   }));
   next.likes = next.likes.map((like) => ({
     user_id: like.user_id,
@@ -1119,6 +1252,10 @@ function publicUserFields(user) {
     channel_name: user.channel_name,
     role: user.role,
     created_at: user.created_at,
+    profilePictureUrl: user.profilePictureUrl || "",
+    channelPictureUrl: user.channelPictureUrl || "",
+    channelBannerUrl: user.channelBannerUrl || "",
+    channelDescription: user.channelDescription || "",
     liked_video_ids: liked,
     history_video_ids: history,
     subscribed_channels: subscriptions,
@@ -1138,13 +1275,42 @@ function listVideosWithMetrics() {
   }
   return [...db.videos]
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-    .map((video) => ({
-      ...video,
+    .map((video) => decorateVideoRecord(video, {
       likes: likesMap.get(video.id) || 0,
       report_count: reportsMap.get(video.id)?.length || 0,
       reports: reportsMap.get(video.id) || [],
-      tags: parseTagsJson(video.tags_json),
     }));
+}
+
+function decorateVideoRecord(video, extras = {}) {
+  const owner = findUserById(video.owner_id) || {};
+  return {
+    ...video,
+    ...extras,
+    tags: parseTagsJson(video.tags_json),
+    ownerFullName: owner.full_name || "",
+    ownerProfilePictureUrl: owner.profilePictureUrl || "",
+    ownerChannelPictureUrl: owner.channelPictureUrl || "",
+    ownerChannelBannerUrl: owner.channelBannerUrl || "",
+    ownerChannelDescription: owner.channelDescription || "",
+  };
+}
+
+function listShorts() {
+  return [...db.shorts]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .map((short) => {
+      const user = findUserById(short.userId) || {};
+      return {
+        id: short.id,
+        userId: short.userId,
+        videoUrl: short.videoUrl,
+        thumbnailUrl: short.thumbnailUrl,
+        title: short.title,
+        createdAt: short.createdAt,
+        user: publicUserFields(user),
+      };
+    });
 }
 
 function listCommentsForVideo(videoId) {
@@ -1161,6 +1327,7 @@ function listCommentsForVideo(videoId) {
         user_id: user.id || comment.user_id,
         channel_name: user.channel_name || "",
         full_name: user.full_name || "",
+        profilePictureUrl: user.profilePictureUrl || "",
       };
     });
 }
@@ -1198,6 +1365,7 @@ function listLiveChatMessages(videoId, limit = 80) {
         user_id: user.id || message.user_id,
         channel_name: user.channel_name || "",
         full_name: user.full_name || "",
+        profilePictureUrl: user.profilePictureUrl || "",
       };
     });
 }
@@ -1259,7 +1427,7 @@ function ensureAdminUsers() {
     if (existing) continue;
     const userId = createId("user");
     const pass = createPasswordHash(admin.password);
-    db.users.push({
+      db.users.push({
       id: userId,
       email: admin.email,
       full_name: admin.fullName,
@@ -1267,6 +1435,10 @@ function ensureAdminUsers() {
       role: "admin",
       password_hash: pass.hash,
       password_salt: pass.salt,
+      profilePictureUrl: "",
+      channelPictureUrl: "",
+      channelBannerUrl: "",
+      channelDescription: "",
       created_at: new Date().toISOString(),
     });
   }
@@ -1295,6 +1467,10 @@ function migrateLegacyJsonData() {
           role: u.role || "user",
           password_hash: u.password_hash,
           password_salt: u.password_salt,
+          profilePictureUrl: u.profilePictureUrl || u.profile_picture_url || "",
+          channelPictureUrl: u.channelPictureUrl || u.channel_picture_url || "",
+          channelBannerUrl: u.channelBannerUrl || u.channel_banner_url || "",
+          channelDescription: u.channelDescription || u.channel_description || "",
           created_at: u.created_at || new Date().toISOString(),
         });
         continue;
@@ -1308,6 +1484,10 @@ function migrateLegacyJsonData() {
         role: u.role || "user",
         password_hash: u.password_hash,
         password_salt: u.password_salt,
+        profilePictureUrl: u.profilePictureUrl || u.profile_picture_url || "",
+        channelPictureUrl: u.channelPictureUrl || u.channel_picture_url || "",
+        channelBannerUrl: u.channelBannerUrl || u.channel_banner_url || "",
+        channelDescription: u.channelDescription || u.channel_description || "",
         created_at: u.created_at || new Date().toISOString(),
       });
     }
@@ -1352,6 +1532,10 @@ function persistLegacyUsers() {
       role: user.role,
       password_hash: user.password_hash,
       password_salt: user.password_salt,
+      profilePictureUrl: user.profilePictureUrl || "",
+      channelPictureUrl: user.channelPictureUrl || "",
+      channelBannerUrl: user.channelBannerUrl || "",
+      channelDescription: user.channelDescription || "",
       created_at: user.created_at,
     }));
   fs.writeFileSync(LEGACY_USERS_FILE, JSON.stringify(users, null, 2));
@@ -1391,14 +1575,17 @@ function listVideos() {
 
 function formatChatPayload(row) {
   if (!row) return null;
+  const user = findUserById(row.user_id) || {};
   return {
     id: row.id,
     videoId: row.video_id,
     message: row.message,
     created_at: row.created_at,
     user_id: row.user_id,
-    channel_name: row.channel_name,
-    full_name: row.full_name,
+    channel_name: row.channel_name || user.channel_name || "",
+    full_name: row.full_name || user.full_name || "",
+    profilePictureUrl: row.profilePictureUrl || user.profilePictureUrl || "",
+    channelPictureUrl: row.channelPictureUrl || user.channelPictureUrl || "",
   };
 }
 
@@ -1486,8 +1673,7 @@ function getVideoRow(id) {
 function getVideoById(id) {
   const v = getVideoRow(id);
   if (!v) return null;
-  v.tags = parseTagsJson(v.tags_json);
-  return v;
+  return decorateVideoRecord(v);
 }
 
 function slugFromText(text) {
