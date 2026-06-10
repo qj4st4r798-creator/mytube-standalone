@@ -2028,7 +2028,7 @@ function renderShortsFeedPage() {
       </div>
       ${state.shorts.length
         ? `<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div class="space-y-6 max-h-[calc(100vh-8rem)] overflow-y-auto snap-y snap-mandatory pr-2">
+            <div class="space-y-6 max-h-[calc(100dvh-9rem)] overflow-y-auto snap-y snap-mandatory pr-0 sm:pr-2">
               ${state.shorts.map((short) => renderShortsFeedCard(short)).join("")}
             </div>
             <aside class="space-y-4">
@@ -2059,10 +2059,13 @@ function renderShortsFeedCard(short) {
   const shortUrl = escapeAttr(short.videoUrl || "");
   const thumbUrl = escapeAttr(short.thumbnailUrl || "");
   return `
-    <article class="snap-start rounded-[2rem] border border-border bg-card p-4 md:p-5 shadow-sm">
-      <div class="relative mx-auto w-full max-w-[420px] overflow-hidden rounded-[1.75rem] bg-black aspect-[9/16]">
+    <article class="snap-start rounded-[2rem] border border-border bg-card p-3 sm:p-4 md:p-5 shadow-sm">
+      <div
+        class="relative mx-auto w-full overflow-hidden rounded-[1.75rem] bg-black aspect-[9/16]"
+        style="width: min(100%, calc((100dvh - 9rem) * 9 / 16)); max-width: 100%;"
+      >
         <video
-          class="short-player h-full w-full object-cover"
+          class="short-player h-full w-full object-contain"
           src="${shortUrl}"
           ${thumbUrl ? `poster="${thumbUrl}"` : ""}
           autoplay
