@@ -312,7 +312,7 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/shorts") {
     const user = requireUser(req, res);
     if (!user) return;
-    sendJson(res, 200, { shorts: listShorts() });
+    sendJson(res, 200, { shorts: listShorts(user.id) });
     return;
   }
 
@@ -346,8 +346,106 @@ async function handleApi(req, res, url) {
     };
     db.shorts.push(record);
     persistDataStore();
-    sendJson(res, 201, { short: listShorts().find((short) => short.id === shortId) || record });
-    return;
+      sendJson(res, 201, { short: listShorts(user.id).find((short) => short.id === shortId) || record });
+      return;
+    }
+
+  if (parts[1] === "shorts" && parts[2]) {
+    const user = requireUser(req, res);
+    if (!user) return;
+    const shortId = parts[2];
+
+    if (parts[3] === "react" && req.method === "POST") {
+      const body = await readJson(req);
+      const reaction = String(body.reaction || "").trim().toLowerCase();
+      if (!["like", "dislike", ""].includes(reaction)) {
+        sendJson(res, 400, { error: "Invalid reaction." });
+        return;
+      }
+      const existingIndex = db.short_reactions.findIndex((entry) => entry.short_id === shortId && entry.user_id === user.id);
+      if (!reaction) {
+        if (existingIndex !== -1) {
+          db.short_reactions.splice(existingIndex, 1);
+          persistDataStore();
+        }
+        sendJson(res, 200, { short: listShorts(user.id).find((short) => short.id === shortId) || null });
+        return;
+      }
+      if (existingIndex === -1) {
+        db.short_reactions.push({
+          id: createId("sreact"),
+          short_id: shortId,
+          user_id: user.id,
+          reaction,
+          created_at: new Date().toISOString(),
+        });
+      } else {
+        db.short_reactions[existingIndex].reaction = reaction;
+        db.short_reactions[existingIndex].created_at = new Date().toISOString();
+      }
+      persistDataStore();
+      sendJson(res, 200, { short: listShorts(user.id).find((short) => short.id === shortId) || null });
+      return;
+    }
+
+    if (parts[3] === "comments") {
+      if (req.method === "GET") {
+        sendJson(res, 200, { comments: listShortComments(shortId) });
+        return;
+      }
+
+      if (req.method === "POST") {
+        const body = await readJson(req);
+        const content = String(body.content || "").trim();
+        if (!content) {
+          sendJson(res, 400, { error: "Comment cannot be empty." });
+          return;
+        }
+        const comment = insertShortComment(shortId, user.id, content);
+        sendJson(res, 201, { comment });
+        return;
+      }
+
+      if (req.method === "DELETE" && parts[4]) {
+        const comment = db.short_comments.find((entry) => entry.id === parts[4] && entry.short_id === shortId) || null;
+        if (!comment) {
+          sendJson(res, 404, { error: "Comment not found." });
+          return;
+        }
+        if (comment.user_id !== user.id && user.role !== "admin") {
+          sendJson(res, 403, { error: "You cannot delete this comment." });
+          return;
+        }
+        deleteShortComment(shortId, parts[4]);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+    }
+
+    if (req.method === "DELETE" && parts[2]) {
+      const shortIndex = db.shorts.findIndex((short) => short.id === shortId);
+      if (shortIndex === -1) {
+        sendJson(res, 404, { error: "Short not found." });
+        return;
+      }
+
+      const short = db.shorts[shortIndex];
+      if (user.role !== "admin" && short.userId !== user.id) {
+        sendJson(res, 403, { error: "Not allowed to delete this short." });
+        return;
+      }
+
+      const [removed] = db.shorts.splice(shortIndex, 1);
+      db.short_reactions = db.short_reactions.filter((entry) => entry.short_id !== shortId);
+      db.short_comments = db.short_comments.filter((entry) => entry.short_id !== shortId);
+      removeUploadedAsset(removed.videoUrl);
+      if (removed.thumbnailUrl) {
+        removeUploadedAsset(removed.thumbnailUrl);
+      }
+      persistDataStore();
+      sendJson(res, 200, { ok: true });
+      return;
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/stocks") {
@@ -1077,6 +1175,8 @@ function createEmptyDataStore() {
     sessions: [],
     videos: [],
     shorts: [],
+    short_reactions: [],
+    short_comments: [],
     likes: [],
     history: [],
     reports: [],
@@ -1156,6 +1256,20 @@ function normalizeDataStore(raw) {
     thumbnailUrl: short.thumbnailUrl || short.thumbnail_url || "",
     title: short.title || "",
     createdAt: short.createdAt || short.created_at || new Date().toISOString(),
+  }));
+  next.short_reactions = next.short_reactions.map((reaction) => ({
+    id: reaction.id || createId("sreact"),
+    short_id: reaction.short_id || reaction.shortId || "",
+    user_id: reaction.user_id || reaction.userId || "",
+    reaction: reaction.reaction === "dislike" ? "dislike" : "like",
+    created_at: reaction.created_at || new Date().toISOString(),
+  }));
+  next.short_comments = next.short_comments.map((comment) => ({
+    id: comment.id || createId("scomment"),
+    short_id: comment.short_id || comment.shortId || "",
+    user_id: comment.user_id || comment.userId || "",
+    content: comment.content || "",
+    created_at: comment.created_at || new Date().toISOString(),
   }));
   next.likes = next.likes.map((like) => ({
     user_id: like.user_id,
@@ -1296,11 +1410,26 @@ function decorateVideoRecord(video, extras = {}) {
   };
 }
 
-function listShorts() {
+function listShorts(userId = "") {
+  const reactionMap = new Map();
+  for (const reaction of db.short_reactions) {
+    const stats = reactionMap.get(reaction.short_id) || { likes: 0, dislikes: 0 };
+    if (reaction.reaction === "dislike") {
+      stats.dislikes += 1;
+    } else {
+      stats.likes += 1;
+    }
+    reactionMap.set(reaction.short_id, stats);
+  }
+
   return [...db.shorts]
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     .map((short) => {
       const user = findUserById(short.userId) || {};
+      const stats = reactionMap.get(short.id) || { likes: 0, dislikes: 0 };
+      const userReaction = userId
+        ? (db.short_reactions.find((entry) => entry.short_id === short.id && entry.user_id === userId)?.reaction || "")
+        : "";
       return {
         id: short.id,
         userId: short.userId,
@@ -1308,9 +1437,50 @@ function listShorts() {
         thumbnailUrl: short.thumbnailUrl,
         title: short.title,
         createdAt: short.createdAt,
+        likes: stats.likes,
+        dislikes: stats.dislikes,
+        userReaction,
         user: publicUserFields(user),
       };
     });
+}
+
+function listShortComments(shortId) {
+  return db.short_comments
+    .filter((comment) => comment.short_id === shortId)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, 200)
+    .map((comment) => {
+      const user = findUserById(comment.user_id) || {};
+      return {
+        id: comment.id,
+        short_id: comment.short_id,
+        content: comment.content,
+        created_at: comment.created_at,
+        user_id: user.id || comment.user_id,
+        full_name: user.full_name || "",
+        channel_name: user.channel_name || "",
+        profilePictureUrl: user.profilePictureUrl || "",
+      };
+    });
+}
+
+function insertShortComment(shortId, userId, content) {
+  const record = {
+    id: createId("scomment"),
+    short_id: shortId,
+    user_id: userId,
+    content,
+    created_at: new Date().toISOString(),
+  };
+  db.short_comments.push(record);
+  persistDataStore();
+  return listShortComments(shortId).find((comment) => comment.id === record.id) || null;
+}
+
+function deleteShortComment(shortId, commentId) {
+  db.short_comments = db.short_comments.filter((comment) => !(comment.id === commentId && comment.short_id === shortId));
+  persistDataStore();
 }
 
 function listCommentsForVideo(videoId) {

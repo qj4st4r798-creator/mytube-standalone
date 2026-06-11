@@ -120,7 +120,7 @@
       "owner_id": "user_sjordan",
       "category": "music",
       "tags_json": "[\"coywire\",\"atlanta\",\"cnn10 project\",\"social studies class\"]",
-      "views": 4,
+      "views": 5,
       "duration": "1:07",
       "is_live": false,
       "is_music": true,
@@ -129,6 +129,8 @@
     }
   ],
   "shorts": [],
+  "short_reactions": [],
+  "short_comments": [],
   "likes": [
     {
       "user_id": "user_sjordan",
@@ -140,7 +142,7 @@
     {
       "user_id": "user_sjordan",
       "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
-      "viewed_at": "2026-06-10T23:23:23.313Z"
+      "viewed_at": "2026-06-11T00:03:50.369Z"
     }
   ],
   "reports": [

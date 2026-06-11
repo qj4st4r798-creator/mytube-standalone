@@ -25,6 +25,9 @@ const state = {
   chatDraft: "",
   commentsByVideo: {},
   commentDraft: "",
+  shortCommentsByShort: {},
+  activeShortId: "",
+  shortCommentDraft: "",
   liveViewerCounts: {},
 };
 
@@ -168,6 +171,9 @@ document.addEventListener("click", async (event) => {
     state.user = null;
     state.videos = [];
     state.shorts = [];
+    state.shortCommentsByShort = {};
+    state.activeShortId = "";
+    state.shortCommentDraft = "";
     state.notice = "You have been logged out.";
     state.route = parseRoute();
     setRoute("/");
@@ -190,6 +196,18 @@ document.addEventListener("click", async (event) => {
     const confirmed = window.confirm("Delete this video?");
     if (!confirmed) return;
     await deleteVideo(button.dataset.videoId);
+    return;
+  }
+
+  if (action === "delete-short") {
+    const confirmed = window.confirm("Delete this short?");
+    if (!confirmed) return;
+    await deleteShort(button.dataset.shortId);
+    return;
+  }
+
+  if (action === "delete-short-comment") {
+    await deleteShortComment(button.dataset.shortId, button.dataset.commentId);
     return;
   }
 
@@ -217,6 +235,32 @@ document.addEventListener("click", async (event) => {
 
   if (action === "delete-comment") {
     await deleteComment(button.dataset.videoId, button.dataset.commentId);
+    return;
+  }
+
+  if (action === "toggle-short-comments") {
+    const shortId = button.dataset.shortId || "";
+    if (!shortId) return;
+    state.activeShortId = shortId;
+    state.shortCommentDraft = "";
+    await loadShortComments(shortId);
+    return;
+  }
+
+  if (action === "close-short-comments") {
+    state.activeShortId = "";
+    state.shortCommentDraft = "";
+    render();
+    return;
+  }
+
+  if (action === "short-like") {
+    await reactToShort(button.dataset.shortId, "like");
+    return;
+  }
+
+  if (action === "short-dislike") {
+    await reactToShort(button.dataset.shortId, "dislike");
     return;
   }
 
@@ -297,6 +341,16 @@ document.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (form.matches("[data-short-comment-form]")) {
+    event.preventDefault();
+    const shortId = form.dataset.shortId;
+    const content = String(new FormData(form).get("comment") || "").trim();
+    if (content) {
+      await postShortComment(shortId, content);
+    }
+    return;
+  }
+
   if (form.matches("[data-mytube-stock-form]")) {
     event.preventDefault();
     await updateMyTubeStock(form);
@@ -313,11 +367,16 @@ document.addEventListener("input", (event) => {
   if (commentInput) {
     state.commentDraft = commentInput.value;
   }
+  const shortCommentInput = event.target.closest("[data-short-comment-input]");
+  if (shortCommentInput) {
+    state.shortCommentDraft = shortCommentInput.value;
+  }
 });
 
 bootstrap();
 
 async function bootstrap() {
+  installShortsStyles();
   await refreshAppData();
 
   await handleRouteEffects();
@@ -715,6 +774,62 @@ async function postComment(videoId, content) {
   }
 }
 
+async function reactToShort(shortId, reaction) {
+  try {
+    const current = state.shorts.find((short) => short.id === shortId)?.userReaction || "";
+    const nextReaction = current === reaction ? "" : reaction;
+    const payload = await api(`/api/shorts/${encodeURIComponent(shortId)}/react`, {
+      method: "POST",
+      body: { reaction: nextReaction },
+    });
+    if (payload.short) {
+      state.shorts = state.shorts.map((short) => (short.id === payload.short.id ? payload.short : short));
+    }
+    render();
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
+async function loadShortComments(shortId) {
+  try {
+    const payload = await api(`/api/shorts/${encodeURIComponent(shortId)}/comments`);
+    state.shortCommentsByShort[shortId] = payload.comments || [];
+    render();
+  } catch (error) {
+    state.shortCommentsByShort[shortId] = [];
+    render();
+  }
+}
+
+async function postShortComment(shortId, content) {
+  state.shortCommentDraft = "";
+  render();
+  try {
+    await api(`/api/shorts/${encodeURIComponent(shortId)}/comments`, {
+      method: "POST",
+      body: { content },
+    });
+    await loadShortComments(shortId);
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
+async function deleteShortComment(shortId, commentId) {
+  try {
+    await api(`/api/shorts/${encodeURIComponent(shortId)}/comments/${encodeURIComponent(commentId)}`, {
+      method: "DELETE",
+    });
+    await loadShortComments(shortId);
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
 async function deleteComment(videoId, commentId) {
   try {
     await api(`/api/videos/${encodeURIComponent(videoId)}/comments/${encodeURIComponent(commentId)}`, {
@@ -909,6 +1024,24 @@ async function deleteVideo(videoId) {
       setRoute("/");
       return;
     }
+    render();
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
+async function deleteShort(shortId) {
+  try {
+    await api(`/api/shorts/${encodeURIComponent(shortId)}`, { method: "DELETE" });
+    state.shorts = state.shorts.filter((short) => short.id !== shortId);
+    delete state.shortCommentsByShort[shortId];
+    if (state.activeShortId === shortId) {
+      state.activeShortId = "";
+      state.shortCommentDraft = "";
+    }
+    await refreshAppData();
+    state.notice = "Short deleted.";
     render();
   } catch (error) {
     state.notice = error.message;
@@ -1716,7 +1849,7 @@ function renderHeader() {
       <div class="flex-1 md:hidden"></div>
       ${renderThemeToggleButton()}
       <button class="hidden sm:flex items-center gap-3 rounded-full bg-secondary px-3 py-1.5 hover:bg-accent" data-route="/profile" type="button">
-        ${renderChannelAvatar(state.user, "h-8 w-8", "text-sm")}
+        ${renderUserAvatar(state.user, "h-8 w-8", "text-sm")}
         <div class="text-left">
           <p class="text-sm font-medium leading-none">${escapeHtml(state.user.full_name || "User")}</p>
           <p class="text-xs text-muted-foreground mt-1">${escapeHtml(state.user.email)}</p>
@@ -2048,6 +2181,7 @@ function renderShortsFeedPage() {
             </aside>
           </div>`
         : renderEmptyState("No Shorts yet", "Be the first to upload a vertical short video to MyTube Shorts.")}
+      ${state.activeShortId ? renderShortCommentsOverlay(state.shorts.find((short) => short.id === state.activeShortId) || null) : ""}
     </div>
   `;
 }
@@ -2058,6 +2192,8 @@ function renderShortsFeedCard(short) {
   const channelName = escapeHtml(author.channel_name || "MyTube user");
   const shortUrl = escapeAttr(short.videoUrl || "");
   const thumbUrl = escapeAttr(short.thumbnailUrl || "");
+  const isLiked = short.userReaction === "like";
+  const isDisliked = short.userReaction === "dislike";
   return `
     <article class="snap-start rounded-[2rem] border border-border bg-card p-3 sm:p-4 md:p-5 shadow-sm">
       <div
@@ -2083,14 +2219,134 @@ function renderShortsFeedCard(short) {
             <button class="mt-3 flex items-center gap-2 text-left" data-route="/channel/${encodeURIComponent(author.channel_name || state.user.channel_name)}">
               ${renderChannelAvatar(author, "h-9 w-9", "text-xs", "ring-2 ring-white/20")}
               <span class="min-w-0">
-                <span class="block text-sm font-medium text-white">${escapeHtml(author.full_name || author.channel_name || "Creator")}</span>
+                <span class="block text-sm font-medium text-white">${escapeHtml(author.channel_name || "Creator")}</span>
                 <span class="block text-xs text-white/70">${channelName}</span>
               </span>
             </button>
+            <div class="mt-4 flex flex-wrap items-center gap-2">
+              <button class="${shortActionButtonClass()}" data-action="short-like" data-short-id="${escapeAttr(short.id)}">
+                ${iconHeart("h-4 w-4 mr-2")} ${isLiked ? "Liked" : "Like"} ${formatCount(short.likes || 0)}
+              </button>
+              <button class="${shortActionButtonClass()}" data-action="short-dislike" data-short-id="${escapeAttr(short.id)}">
+                ${iconThumbsDown("h-4 w-4 mr-2")} ${isDisliked ? "Disliked" : "Dislike"} ${formatCount(short.dislikes || 0)}
+              </button>
+              <button class="${shortActionButtonClass()}" data-action="toggle-short-comments" data-short-id="${escapeAttr(short.id)}">
+                ${iconMessageCircle("h-4 w-4 mr-2")} Comments
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </article>
+  `;
+}
+
+function renderShortCommentsOverlay(short) {
+  if (!short) return "";
+  const comments = state.shortCommentsByShort[short.id] || [];
+  const author = short.user || {};
+  const isLiked = short.userReaction === "like";
+  const isDisliked = short.userReaction === "dislike";
+  return `
+    <div class="fixed inset-0 z-[80] bg-black/75 backdrop-blur-sm p-0 md:p-8">
+      <button class="absolute inset-0 z-0" type="button" aria-label="Close Shorts comments" data-action="close-short-comments"></button>
+      <div class="relative z-10 mx-auto flex h-full w-full max-w-6xl items-stretch justify-center md:items-center">
+        <div class="grid h-full w-full gap-0 overflow-hidden rounded-none border border-border bg-card shadow-2xl animate-shorts-panel lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] md:max-h-[92vh] md:rounded-[2rem]">
+          <div class="relative h-[55vh] bg-black lg:h-full">
+            <video
+              class="h-full w-full object-contain"
+              src="${escapeAttr(short.videoUrl || "")}"
+              ${short.thumbnailUrl ? `poster="${escapeAttr(short.thumbnailUrl)}"` : ""}
+              autoplay
+              muted
+              loop
+              playsinline
+              controls
+              preload="metadata"
+            ></video>
+            <div class="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/20 pointer-events-none"></div>
+            <div class="absolute left-0 right-0 bottom-0 p-4 md:p-6">
+              <div class="flex items-center justify-between gap-4">
+                <div class="min-w-0">
+                  <h2 class="text-xl md:text-2xl font-semibold text-white line-clamp-2">${escapeHtml(short.title || "Untitled Short")}</h2>
+                  <button class="mt-2 flex items-center gap-2 text-left" data-route="/channel/${encodeURIComponent(author.channel_name || state.user.channel_name)}">
+                    ${renderChannelAvatar(author, "h-8 w-8", "text-xs", "ring-2 ring-white/20")}
+                    <span class="text-left">
+                      <span class="block text-sm font-medium text-white">${escapeHtml(author.channel_name || "Creator")}</span>
+                      <span class="block text-xs text-white/70">${escapeHtml(author.channel_name || "")}</span>
+                    </span>
+                  </button>
+                </div>
+                <button class="${shortActionButtonClass()}" data-action="close-short-comments" type="button">
+                  Close
+                </button>
+              </div>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button class="${shortActionButtonClass()}" data-action="short-like" data-short-id="${escapeAttr(short.id)}">
+                  ${iconHeart("h-4 w-4 mr-2")} ${isLiked ? "Liked" : "Like"} ${formatCount(short.likes || 0)}
+                </button>
+                <button class="${shortActionButtonClass()}" data-action="short-dislike" data-short-id="${escapeAttr(short.id)}">
+                  ${iconThumbsDown("h-4 w-4 mr-2")} ${isDisliked ? "Disliked" : "Dislike"} ${formatCount(short.dislikes || 0)}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="flex min-h-0 h-[45vh] flex-col border-t border-border lg:h-full lg:border-t-0 lg:border-l">
+            <div class="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h3 class="text-lg font-semibold">Comments</h3>
+                <p class="text-xs text-muted-foreground">${comments.length} comment${comments.length === 1 ? "" : "s"}</p>
+              </div>
+              <button class="${shortActionButtonClass()}" data-action="close-short-comments" type="button">Done</button>
+            </div>
+            <div class="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              ${
+                comments.length
+                  ? comments.map((comment) => renderShortCommentRow(comment, short.id)).join("")
+                  : `<p class="text-sm text-muted-foreground">No comments yet. Be the first to comment on this Short.</p>`
+              }
+            </div>
+            <div class="border-t border-border p-4">
+              ${state.user
+                ? `<form data-short-comment-form class="space-y-3" data-short-id="${short.id}">
+                    <textarea class="${textareaClass()}" name="comment" placeholder="Add a comment..." data-short-comment-input>${escapeHtml(state.shortCommentDraft)}</textarea>
+                    <button class="${primaryButtonClass()}" type="submit">Post comment</button>
+                  </form>`
+                : `<p class="text-sm text-muted-foreground">Log in to leave a comment.</p>`}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderShortCommentRow(comment, shortId) {
+  const author = escapeHtml(comment.full_name || comment.channel_name || "User");
+  const body = escapeHtml(comment.content || "");
+  const timestamp = comment.created_at ? new Date(comment.created_at).toLocaleString() : "";
+  const canDelete = state.user && (state.user.role === "admin" || state.user.id === comment.user_id);
+  const avatar = {
+    channel_name: comment.channel_name || "",
+    full_name: comment.full_name || comment.channel_name || "User",
+    profilePictureUrl: comment.profilePictureUrl || "",
+  };
+  return `
+    <div class="rounded-2xl border border-border bg-background/70 p-4 text-sm">
+      <div class="flex items-start gap-3">
+        ${renderUserAvatar(avatar, "h-10 w-10", "text-xs", "shrink-0")}
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="font-semibold text-foreground">${author}</p>
+              <p class="text-xs text-muted-foreground">${escapeHtml(timestamp)}</p>
+            </div>
+            ${canDelete ? `<button class="${secondaryButtonClass("text-xs h-auto px-3 py-2")}" data-action="delete-short-comment" data-short-id="${escapeAttr(shortId)}" data-comment-id="${escapeAttr(comment.id)}">Delete</button>` : ""}
+          </div>
+          <p class="mt-2 text-sm text-foreground whitespace-pre-wrap">${body}</p>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -2665,6 +2921,15 @@ function renderAdminPage() {
             : renderMiniEmpty("No videos have been uploaded yet.")
         }
       </section>
+
+      <section class="rounded-3xl border border-border bg-card p-6 mt-8">
+        <h2 class="text-xl font-semibold mb-4">All Shorts</h2>
+        ${
+          state.shorts.length
+            ? `<div class="space-y-3">${state.shorts.map((short) => renderAdminShortRow(short)).join("")}</div>`
+            : renderMiniEmpty("No shorts have been uploaded yet.")
+        }
+      </section>
     </div>
   `;
 }
@@ -2791,6 +3056,36 @@ function renderAdminVideoRow(video) {
         <div class="flex gap-2 shrink-0">
           <button class="${secondaryButtonClass()}" data-route="/watch/${video.id}">${iconVideo("h-4 w-4 mr-2")}Open</button>
           <button class="${secondaryButtonClass()}" data-action="delete-video" data-video-id="${video.id}">${iconTrash("h-4 w-4 mr-2")}Remove</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminShortRow(short) {
+  const author = short.user || {};
+  return `
+    <div class="rounded-2xl border border-border bg-background/40 p-4">
+      <div class="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="h-20 w-12 rounded-xl overflow-hidden bg-secondary shrink-0">
+            ${
+              short.thumbnailUrl
+                ? `<img class="h-full w-full object-cover" src="${escapeAttr(short.thumbnailUrl)}" alt="${escapeAttr(short.title || "Short")}" />`
+                : `<div class="h-full w-full flex items-center justify-center">${iconShorts("h-5 w-5 text-muted-foreground")}</div>`
+            }
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-3 flex-wrap">
+              <button class="font-semibold hover:text-primary text-left" data-route="/shorts">${escapeHtml(short.title || "Untitled Short")}</button>
+              <span class="rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">${escapeHtml(author.channel_name || "Unknown channel")}</span>
+            </div>
+            <p class="text-sm text-muted-foreground mt-2">${escapeHtml(author.full_name || author.channel_name || "Creator")}</p>
+          </div>
+        </div>
+        <div class="flex gap-2 shrink-0">
+          <button class="${secondaryButtonClass()}" data-route="/shorts">${iconShorts("h-4 w-4 mr-2")}Open</button>
+          <button class="${secondaryButtonClass()}" data-action="delete-short" data-short-id="${escapeAttr(short.id)}">${iconTrash("h-4 w-4 mr-2")}Remove</button>
         </div>
       </div>
     </div>
@@ -3192,6 +3487,34 @@ function secondaryButtonClass(extra = "") {
   return `inline-flex items-center justify-center rounded-md border border-border bg-secondary px-4 py-2.5 text-sm font-medium hover:bg-accent ${extra}`.trim();
 }
 
+function shortActionButtonClass(extra = "") {
+  return `inline-flex items-center justify-center rounded-md border border-white/15 bg-white/10 px-3 py-2 text-xs font-medium text-white hover:bg-white/20 ${extra}`.trim();
+}
+
+function installShortsStyles() {
+  const styleId = "shorts-overlay-style";
+  if (document.getElementById(styleId)) return;
+  const style = document.createElement("style");
+  style.id = styleId;
+  style.textContent = `
+    @keyframes shorts-panel-in {
+      from {
+        opacity: 0;
+        transform: translateY(24px) scale(0.985);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    .animate-shorts-panel {
+      animation: shorts-panel-in 180ms ease-out;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 function initializeTheme() {
   installThemeStyles();
   const savedTheme = readTheme();
@@ -3428,7 +3751,7 @@ function renderCommentSection(video) {
 }
 
 function renderCommentRow(comment, videoId) {
-  const author = escapeHtml(comment.channel_name || comment.full_name || "User");
+  const author = escapeHtml(comment.full_name || comment.channel_name || "User");
   const body = escapeHtml(comment.content || "");
   const timestamp = comment.created_at ? new Date(comment.created_at).toLocaleString() : "";
   const canDelete = state.user && (state.user.role === "admin" || state.user.id === comment.user_id);
@@ -3550,6 +3873,8 @@ function iconTrending(classes) { return svgIcon(classes, '<path d="m3 17 6-6 4 4
 function iconUsers(classes) { return svgIcon(classes, '<circle cx="9" cy="8" r="3" /><path d="M3 19c0-3.3 2.7-6 6-6" /><circle cx="17" cy="10" r="3" /><path d="M13 19c.5-2.8 2.9-5 5.8-5" />'); }
 function iconHistory(classes) { return svgIcon(classes, '<path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 7v5l3 2" />'); }
 function iconHeart(classes) { return svgIcon(classes, '<path d="m12 20-1.2-1.1C5.4 14 2 10.9 2 7.1 2 4.4 4.2 2 6.9 2c1.6 0 3.1.8 4.1 2 1-1.2 2.5-2 4.1-2C17.8 2 20 4.4 20 7.1c0 3.8-3.4 6.9-8.8 11.8Z" />'); }
+function iconThumbsDown(classes) { return svgIcon(classes, '<path d="M10 3h7v10h-4l-3 8-3-8H4V6a3 3 0 0 1 3-3h3Z" />'); }
+function iconMessageCircle(classes) { return svgIcon(classes, '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.8 8.8 0 0 1-4-.96L3 20l1.1-5.3A8.5 8.5 0 1 1 21 11.5Z" /><path d="M8 12h8M8 9h5" />'); }
 function iconUser(classes) { return svgIcon(classes, '<circle cx="12" cy="8" r="4" /><path d="M4 20c1.8-3.5 5-5 8-5s6.2 1.5 8 5" />'); }
 function iconMusic(classes) { return svgIcon(classes, '<path d="M9 18V5l10-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="16" cy="16" r="3" />'); }
 function iconLive(classes) { return svgIcon(classes, '<rect x="3" y="7" width="12" height="10" rx="2" /><path d="m16 10 5-3v10l-5-3" /><circle cx="8" cy="12" r="1.5" />'); }
