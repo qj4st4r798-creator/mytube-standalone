@@ -1851,7 +1851,7 @@ function renderHeader() {
       <button class="hidden sm:flex items-center gap-3 rounded-full bg-secondary px-3 py-1.5 hover:bg-accent" data-route="/profile" type="button">
         ${renderUserAvatar(state.user, "h-8 w-8", "text-sm")}
         <div class="text-left">
-          <p class="text-sm font-medium leading-none">${escapeHtml(state.user.channel_name || state.user.full_name || "User")}</p>
+          <p class="text-sm font-medium leading-none">${escapeHtml(channelDisplayName(state.user))}</p>
           <p class="text-xs text-muted-foreground mt-1">${escapeHtml(state.user.email)}</p>
         </div>
       </button>
@@ -2821,7 +2821,7 @@ function renderChannelPage(channelName) {
             <div class="flex items-end gap-4">
               ${renderChannelAvatar(channelUser, "h-32 w-32", "text-4xl", "ring-4 ring-card")}
               <div class="pb-2">
-                <h1 class="text-3xl font-bold">${escapeHtml(channelUser.full_name || decoded)}</h1>
+                <h1 class="text-3xl font-bold">${escapeHtml(channelDisplayName(channelUser) || decoded)}</h1>
                 <p class="text-muted-foreground mt-2">${videos.length} videos • ${formatCount(totalViews)} total views</p>
                 <p class="text-sm text-muted-foreground mt-1">${escapeHtml(channelUser.channelDescription || "No channel description yet.")}</p>
               </div>
@@ -3794,6 +3794,10 @@ function userDisplayName(user) {
   return String(user?.full_name || user?.fullName || user?.channel_name || user?.email || "U").trim() || "U";
 }
 
+function channelDisplayName(user) {
+  return String(user?.channel_name || user?.channelName || user?.full_name || user?.fullName || user?.email || "MyTube").trim() || "MyTube";
+}
+
 function userAvatarUrl(user) {
   return String(user?.profilePictureUrl || user?.profile_picture_url || "").trim();
 }
@@ -3832,7 +3836,7 @@ function renderChannelAvatar(user, sizeClass = "h-10 w-10", textClass = "text-sm
 
 function renderChannelBanner(user, heightClass = "h-56") {
   const url = channelBannerUrl(user);
-  const label = userDisplayName(user);
+  const label = channelDisplayName(user);
   if (url) {
     return `
       <div class="relative ${heightClass} overflow-hidden bg-secondary">
