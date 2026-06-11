@@ -1851,7 +1851,7 @@ function renderHeader() {
       <button class="hidden sm:flex items-center gap-3 rounded-full bg-secondary px-3 py-1.5 hover:bg-accent" data-route="/profile" type="button">
         ${renderUserAvatar(state.user, "h-8 w-8", "text-sm")}
         <div class="text-left">
-          <p class="text-sm font-medium leading-none">${escapeHtml(state.user.full_name || "User")}</p>
+          <p class="text-sm font-medium leading-none">${escapeHtml(state.user.channel_name || state.user.full_name || "User")}</p>
           <p class="text-xs text-muted-foreground mt-1">${escapeHtml(state.user.email)}</p>
         </div>
       </button>
