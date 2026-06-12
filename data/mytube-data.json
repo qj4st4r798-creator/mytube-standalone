@@ -115,11 +115,11 @@
       "created_at": "2026-06-10T22:56:02.250Z"
     },
     {
-      "id": "session_eca30d11-c0ba-40cd-9834-456fef2c005f",
-      "user_id": "user_sjordan",
-      "token_hash": "c3e6ae092ebf03cb7cdc266a6f6fac9e6482549807d7e9d822a885a273ef8dc8",
-      "expires_at": "2026-06-19T18:06:22.810Z",
-      "created_at": "2026-06-12T18:06:22.810Z"
+      "id": "session_ecae493e-124e-4a57-be22-57a429a35ed8",
+      "user_id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+      "token_hash": "0386534c50b51950d8a2f8d4cfd6d869caf97c5c3e760a68a89e408cf9109d65",
+      "expires_at": "2026-06-19T18:15:20.820Z",
+      "created_at": "2026-06-12T18:15:20.820Z"
     }
   ],
   "videos": [],
