@@ -7,9 +7,9 @@
     "role": "admin",
     "password_hash": "c12312e26cc571af0cb69df167e0012c9512730f65d5ed4520b928c922848c3e",
     "password_salt": "e27467bdc64c888b38d2b6e197b3a22b",
-    "profilePictureUrl": "/uploads/e09ee4d6-85f9-4aa5-b4e4-eeb678ca9578.jpeg",
-    "channelPictureUrl": "/uploads/f900fab1-3213-4759-a8d2-45ce3803d7ed.png",
-    "channelBannerUrl": "/uploads/a6c89033-9c8a-4686-a2c7-dc2ca6d04245.png",
+    "profilePictureUrl": "/uploads/328d6595-2cde-473e-9fd1-c2e156882005.jpeg",
+    "channelPictureUrl": "/uploads/a37f6d7f-bc5c-448c-bb3b-7a5a62ac3a0f.png",
+    "channelBannerUrl": "/uploads/3dcd7cbd-1d49-4258-bd60-fc324f052e24.png",
     "channelDescription": "Welcome to the official MyTube channel — your source for all things MyTube!\r\nWe post updates, feature announcements, developer news, and behind‑the‑scenes previews of upcoming tools and improvements.\r\n\r\nStay tuned for:\r\n\r\nMyTube Updates — new features, bug fixes, and version releases\r\n\r\nCommunity Highlights — spotlighting creators and projects built on MyTube\r\n\r\nDeveloper Insights — tips, tutorials, and technical breakdowns\r\n\r\nAnnouncements — official news and important notices\r\n\r\nSubscribe to stay connected with the MyTube team and never miss what’s next!",
     "created_at": "2026-04-05T19:00:00.000Z"
   },
@@ -77,10 +77,10 @@
     "role": "user",
     "password_hash": "347638970425d8b58b1e9f741a8b312fc2b3650c5b5754218e7fc0c523e1f602",
     "password_salt": "4f144be691456a611e20e2894dd0ea69",
-    "profilePictureUrl": "/uploads/050862f2-4a50-4405-b593-3fe86b2938ba.png",
-    "channelPictureUrl": "/uploads/e7b0bb93-f5eb-4162-b35a-3b587a583474.png",
-    "channelBannerUrl": "/uploads/f8850a39-c6e0-431a-9227-9591b65e0716.png",
-    "channelDescription": "",
+    "profilePictureUrl": "/uploads/7d43cacd-a9a3-40e0-bfb1-f9fa82d50949.png",
+    "channelPictureUrl": "/uploads/d6334857-dccf-4482-be49-4f3968e1e000.png",
+    "channelBannerUrl": "/uploads/4fff7005-c142-42b9-9c1a-b1d5d4d1a6f4.png",
+    "channelDescription": "David T Howard sporting events",
     "created_at": "2026-06-11T18:17:58.186Z"
   }
 ]
