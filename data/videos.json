@@ -1,25 +1,47 @@
 [
   {
-    "id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
-    "title": "CNN 10 Friday Recap Sound",
-    "description": "Free cnn10 music",
-    "thumbnail_url": "/uploads/f536d961-e203-4fb3-85d2-63f1acd3c0bf.png",
-    "video_url": "/uploads/5e064fb1-4560-486e-a748-ed30c8b61478.mp3",
+    "id": "video_32ec969a-855c-46e4-893f-259866626ae7",
+    "title": "David T Howard vs Kipp",
+    "description": "David T Howard vs Kipp",
+    "thumbnail_url": "/uploads/2f6ac596-da49-41e2-93a6-1f8bb6bfa445.png",
+    "video_url": "/uploads/005aa9f4-f2f4-42f5-84dc-911731531ccd.mp4",
+    "current_frame_url": "",
+    "channel_name": "david-t-howard-sports",
+    "owner_id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+    "category": "sports",
+    "tags": [
+      "dth",
+      "kipp",
+      "sports",
+      "athletics"
+    ],
+    "views": 0,
+    "duration": "8:35",
+    "is_live": false,
+    "is_music": false,
+    "is_sports": true,
+    "created_at": "2026-06-12T17:33:53.491Z"
+  },
+  {
+    "id": "video_a4441cca-b710-47a1-a979-4a12da2735ae",
+    "title": "MyTube Update 1.7",
+    "description": "Quick update on MyTube! We’ve added MyTube Sports, launched MyTube Shorts, and introduced new channel banners and profile pictures so creators can customize their pages. More upgrades are coming soon — thanks for supporting MyTube!",
+    "thumbnail_url": "/uploads/c94c213f-2c43-477a-ac52-8127d6a2555e.png",
+    "video_url": "/uploads/a47dc5d8-e3e9-48cd-9046-f3b8a6144e09.mp4",
     "current_frame_url": "",
     "channel_name": "MyTube",
     "owner_id": "user_sjordan",
-    "category": "music",
+    "category": "general",
     "tags": [
-      "coywire",
-      "atlanta",
-      "cnn10 project",
-      "social studies class"
+      "update",
+      "new",
+      "crazy"
     ],
-    "views": 4,
-    "duration": "1:07",
+    "views": 2,
+    "duration": "1:01",
     "is_live": false,
-    "is_music": true,
+    "is_music": false,
     "is_sports": false,
-    "created_at": "2026-04-10T14:38:55.960Z"
+    "created_at": "2026-06-11T18:15:12.807Z"
   }
 ]

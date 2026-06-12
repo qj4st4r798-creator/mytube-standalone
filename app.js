@@ -671,7 +671,8 @@ async function createVideo(formData) {
     const isLive = String(formData.get("is_live") || "").toLowerCase() === "true" || formData.get("is_live") === "on";
     const isMusic = formData.get("is_music") === "on";
     const isFinancial = formData.get("is_financial") === "on";
-    const isSports = formData.get("is_sports") === "on";
+    const selectedCategory = String(formData.get("category") || "general").trim() || "general";
+    const isSports = formData.get("is_sports") === "on" || selectedCategory === "sports";
     const rawTags = String(formData.get("tags") || "");
     const normalizedTags = Array.from(new Set([
       ...rawTags.split(",").map((tag) => tag.trim()).filter(Boolean),
@@ -686,7 +687,7 @@ async function createVideo(formData) {
     multipart.set("title", String(formData.get("title") || "").trim());
     multipart.set("description", String(formData.get("description") || "").trim());
     multipart.set("channel_name", state.user?.channel_name || "");
-    multipart.set("category", isFinancial ? "stock" : isSports ? "sports" : String(formData.get("category") || "general"));
+    multipart.set("category", isFinancial ? "stock" : isSports ? "sports" : selectedCategory);
     multipart.set("tags", normalizedTags);
     multipart.set("duration", String(formData.get("duration") || "0:00"));
     multipart.set("is_live", isLive ? "true" : "false");
@@ -701,17 +702,17 @@ async function createVideo(formData) {
       multipart.set("file", videoFile);
     }
 
-    const payload = isLive
-      ? await api("/api/videos", {
-          method: "POST",
-          body: multipart,
-          formData: true,
-        })
-      : await api("/upload", {
-          method: "POST",
-          body: multipart,
-          formData: true,
-        });
+    const uploadRoute =
+  isLive || isSports
+    ? "/api/videos"
+    : "/upload";
+
+const payload = await api(uploadRoute, {
+  method: "POST",
+  body: multipart,
+  formData: true,
+});
+
 
     if (isLive) {
       try {

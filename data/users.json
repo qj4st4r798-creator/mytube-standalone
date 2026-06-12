@@ -68,5 +68,19 @@
     "channelBannerUrl": "",
     "channelDescription": "",
     "created_at": "2026-04-11T17:36:13.480Z"
+  },
+  {
+    "id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+    "email": "erictalbolt@mytube.co",
+    "full_name": "Eric Talbolt",
+    "channel_name": "david-t-howard-sports",
+    "role": "user",
+    "password_hash": "347638970425d8b58b1e9f741a8b312fc2b3650c5b5754218e7fc0c523e1f602",
+    "password_salt": "4f144be691456a611e20e2894dd0ea69",
+    "profilePictureUrl": "/uploads/050862f2-4a50-4405-b593-3fe86b2938ba.png",
+    "channelPictureUrl": "/uploads/e7b0bb93-f5eb-4162-b35a-3b587a583474.png",
+    "channelBannerUrl": "/uploads/f8850a39-c6e0-431a-9227-9591b65e0716.png",
+    "channelDescription": "",
+    "created_at": "2026-06-11T18:17:58.186Z"
   }
 ]

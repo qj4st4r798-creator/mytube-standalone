@@ -69,6 +69,20 @@
       "channelBannerUrl": "",
       "channelDescription": "",
       "created_at": "2026-04-11T17:36:13.480Z"
+    },
+    {
+      "id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+      "email": "erictalbolt@mytube.co",
+      "full_name": "Eric Talbolt",
+      "channel_name": "david-t-howard-sports",
+      "role": "user",
+      "password_hash": "347638970425d8b58b1e9f741a8b312fc2b3650c5b5754218e7fc0c523e1f602",
+      "password_salt": "4f144be691456a611e20e2894dd0ea69",
+      "profilePictureUrl": "/uploads/050862f2-4a50-4405-b593-3fe86b2938ba.png",
+      "channelPictureUrl": "/uploads/e7b0bb93-f5eb-4162-b35a-3b587a583474.png",
+      "channelBannerUrl": "/uploads/f8850a39-c6e0-431a-9227-9591b65e0716.png",
+      "channelDescription": "",
+      "created_at": "2026-06-11T18:17:58.186Z"
     }
   ],
   "sessions": [
@@ -101,60 +115,73 @@
       "created_at": "2026-06-10T22:56:02.250Z"
     },
     {
-      "id": "session_b98902de-932a-4583-b41f-2d66fb27872c",
-      "user_id": "user_sjordan",
-      "token_hash": "d5d1fde864b5e89f03f6ae1b2f64d628d3afa1cd94cb1c54c3bea9efd30a716c",
-      "expires_at": "2026-06-17T23:02:17.030Z",
-      "created_at": "2026-06-10T23:02:17.030Z"
+      "id": "session_fb8892c7-d5d7-4393-87db-af0068d3bc36",
+      "user_id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+      "token_hash": "d37df02ab20a64251ccaac0e1e4d51681ca5320c0776ad0f1e821bba0e7f1904",
+      "expires_at": "2026-06-18T18:17:58.187Z",
+      "created_at": "2026-06-11T18:17:58.187Z"
     }
   ],
   "videos": [
     {
-      "id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
-      "title": "CNN 10 Friday Recap Sound",
-      "description": "Free cnn10 music",
-      "thumbnail_url": "/uploads/f536d961-e203-4fb3-85d2-63f1acd3c0bf.png",
-      "video_url": "/uploads/5e064fb1-4560-486e-a748-ed30c8b61478.mp3",
+      "id": "video_a4441cca-b710-47a1-a979-4a12da2735ae",
+      "title": "MyTube Update 1.7",
+      "description": "Quick update on MyTube! We’ve added MyTube Sports, launched MyTube Shorts, and introduced new channel banners and profile pictures so creators can customize their pages. More upgrades are coming soon — thanks for supporting MyTube!",
+      "thumbnail_url": "/uploads/c94c213f-2c43-477a-ac52-8127d6a2555e.png",
+      "video_url": "/uploads/a47dc5d8-e3e9-48cd-9046-f3b8a6144e09.mp4",
       "current_frame_url": "",
       "channel_name": "MyTube",
       "owner_id": "user_sjordan",
-      "category": "music",
-      "tags_json": "[\"coywire\",\"atlanta\",\"cnn10 project\",\"social studies class\"]",
-      "views": 5,
-      "duration": "1:07",
+      "category": "general",
+      "tags_json": "[\"update\",\"new\",\"crazy\"]",
+      "views": 2,
+      "duration": "1:01",
       "is_live": false,
-      "is_music": true,
+      "is_music": false,
       "is_sports": false,
-      "created_at": "2026-04-10T14:38:55.960Z"
+      "created_at": "2026-06-11T18:15:12.807Z"
+    },
+    {
+      "id": "video_32ec969a-855c-46e4-893f-259866626ae7",
+      "title": "David T Howard vs Kipp",
+      "description": "David T Howard vs Kipp",
+      "thumbnail_url": "/uploads/2f6ac596-da49-41e2-93a6-1f8bb6bfa445.png",
+      "video_url": "/uploads/005aa9f4-f2f4-42f5-84dc-911731531ccd.mp4",
+      "current_frame_url": "",
+      "channel_name": "david-t-howard-sports",
+      "owner_id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+      "category": "sports",
+      "tags_json": "[\"dth\",\"kipp\",\"sports\",\"athletics\"]",
+      "views": 1,
+      "duration": "8:35",
+      "is_live": false,
+      "is_music": false,
+      "is_sports": true,
+      "created_at": "2026-06-12T17:33:53.491Z"
     }
   ],
   "shorts": [],
   "short_reactions": [],
   "short_comments": [],
-  "likes": [
-    {
-      "user_id": "user_sjordan",
-      "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
-      "created_at": "2026-04-10T14:39:03.541Z"
-    }
-  ],
+  "likes": [],
   "history": [
     {
       "user_id": "user_sjordan",
-      "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
-      "viewed_at": "2026-06-11T00:03:50.369Z"
-    }
-  ],
-  "reports": [
+      "video_id": "video_a4441cca-b710-47a1-a979-4a12da2735ae",
+      "viewed_at": "2026-06-11T18:15:12.818Z"
+    },
     {
-      "id": "report_dfaf1652-dc71-41e2-b724-eb3e1b694914",
-      "video_id": "video_a5104cc1-1a01-4f87-b7b8-616bfe77277e",
-      "user_id": "user_sjordan",
-      "email": "sjordan4076@mytube.co",
-      "reason": "I dont like it",
-      "created_at": "2026-06-07T19:01:09.307Z"
+      "user_id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+      "video_id": "video_a4441cca-b710-47a1-a979-4a12da2735ae",
+      "viewed_at": "2026-06-12T17:15:41.442Z"
+    },
+    {
+      "user_id": "user_c6df95da-04ac-492a-afe4-1264a233c896",
+      "video_id": "video_32ec969a-855c-46e4-893f-259866626ae7",
+      "viewed_at": "2026-06-12T17:33:53.516Z"
     }
   ],
+  "reports": [],
   "subscriptions": [],
   "signals": [],
   "comments": [],

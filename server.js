@@ -963,9 +963,10 @@ async function handleLocalVideoUpload(req, res) {
   const channelName = String(fields.channel_name || req.headers["x-upload-channel-name"] || user.channel_name || "").trim() || user.channel_name;
   const category = String(fields.category || "general").trim() || "general";
   const duration = String(fields.duration || "0:00").trim() || "0:00";
-  const tagsJson = JSON.stringify(parseTags(fields.tags));
+  const tags = parseTags(fields.tags);
+  const tagsJson = JSON.stringify(tags);
   const isLive = toBoolean(fields.is_live);
-  const isSports = toBoolean(fields.is_sports);
+  const isSports = toBoolean(fields.is_sports) || category === "sports" || tags.includes("sports");
 
   if (!title) {
     removeUploadedFiles(files);
