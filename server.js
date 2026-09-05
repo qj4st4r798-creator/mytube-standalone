@@ -235,7 +235,9 @@ async function handleApi(req, res, url) {
       channelPictureUrl,
       channelBannerUrl,
       channelDescription,
-      channelBackgroundColor: "#ffffff",
+      channelBackgroundColor: "#000000",
+      channelTextColor: "#ffffff",
+      isPremium: false,
       created_at: new Date().toISOString(),
     });
     persistDataStore();
@@ -281,7 +283,7 @@ async function handleApi(req, res, url) {
     const channelPictureFile = files.channel_picture_file || null;
     const channelBannerFile = files.channel_banner_file || null;
     const channelDescription = String(fields.channel_description || "").trim();
-    const hasUpdate = Boolean(channelPictureFile || channelBannerFile || fields.channel_description !== undefined || fields.channel_background_color !== undefined);
+    const hasUpdate = Boolean(channelPictureFile || channelBannerFile || fields.channel_description !== undefined || fields.channel_background_color !== undefined || fields.channel_text_color !== undefined);
     if (!hasUpdate) {
       sendJson(res, 400, { error: "No channel updates were provided." });
       return;
@@ -298,12 +300,28 @@ async function handleApi(req, res, url) {
       user.channelDescription = channelDescription;
     }
     if (fields.channel_background_color !== undefined) {
+      if (user.role !== "admin" && !user.isPremium) {
+        sendJson(res, 403, { error: "MyStream Premium is required to change channel colors." });
+        return;
+      }
       const color = String(fields.channel_background_color || "").trim();
       if (!/^#[0-9a-f]{6}$/i.test(color)) {
         sendJson(res, 400, { error: "Choose a valid six-digit background color." });
         return;
       }
       user.channelBackgroundColor = color.toLowerCase();
+    }
+    if (fields.channel_text_color !== undefined) {
+      if (user.role !== "admin" && !user.isPremium) {
+        sendJson(res, 403, { error: "MyStream Premium is required to change channel colors." });
+        return;
+      }
+      const color = String(fields.channel_text_color || "").trim();
+      if (!/^#[0-9a-f]{6}$/i.test(color)) {
+        sendJson(res, 400, { error: "Choose a valid six-digit text color." });
+        return;
+      }
+      user.channelTextColor = color.toLowerCase();
     }
     persistDataStore();
     persistLegacyUsers();
@@ -871,10 +889,54 @@ async function handleApi(req, res, url) {
       full_name: channel.full_name,
       email: channel.email,
       role: channel.role,
+      isPremium: channel.role === "admin" || Boolean(channel.isPremium),
       video_count: db.videos.filter((video) => video.owner_id === channel.id).length,
       short_count: db.shorts.filter((short) => short.userId === channel.id).length,
     }));
     sendJson(res, 200, { channels });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/admin/users") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    sendJson(res, 200, { users: db.users.map((account) => ({
+      id: account.id,
+      email: account.email,
+      full_name: account.full_name,
+      channel_name: account.channel_name,
+      profilePictureUrl: account.profilePictureUrl || "",
+      role: account.role,
+      isPremium: account.role === "admin" || Boolean(account.isPremium),
+    })) });
+    return;
+  }
+
+  if (req.method === "POST" && parts[0] === "api" && parts[1] === "admin" && parts[2] === "users" && parts[3] && parts[4] === "premium") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    const target = findUserById(decodeURIComponent(parts[3]));
+    if (!target) {
+      sendJson(res, 404, { error: "User not found." });
+      return;
+    }
+    if (target.role === "admin") {
+      sendJson(res, 400, { error: "Admins already have MyStream Premium." });
+      return;
+    }
+    const body = await readJson(req);
+    target.isPremium = Boolean(body.granted);
+    persistDataStore();
+    persistLegacyUsers();
+    sendJson(res, 200, { user: publicUser(target.id) });
     return;
   }
 
@@ -933,8 +995,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/ad") {
-    requireUser(req, res);
-    if (!res.writableEnded) sendJson(res, 200, { ad: db.ad_config });
+    const user = requireUser(req, res);
+    if (!user) return;
+    sendJson(res, 200, { ad: db.ad_config });
     return;
   }
 
@@ -1369,6 +1432,8 @@ function normalizeDataStore(raw) {
     channelBannerUrl: user.channelBannerUrl || user.channel_banner_url || "",
     channelDescription: user.channelDescription || user.channel_description || "",
     channelBackgroundColor: normalizeChannelBackgroundColor(user.channelBackgroundColor || user.channel_background_color),
+    channelTextColor: normalizeChannelTextColor(user.channelTextColor || user.channel_text_color),
+    isPremium: Boolean(user.isPremium || user.is_premium),
     created_at: user.created_at || new Date().toISOString(),
   }));
   next.sessions = next.sessions.map((session) => ({
@@ -1501,6 +1566,10 @@ function normalizeEmail(email) {
 }
 
 function normalizeChannelBackgroundColor(color) {
+  return /^#[0-9a-f]{6}$/i.test(String(color || "")) ? String(color).toLowerCase() : "#000000";
+}
+
+function normalizeChannelTextColor(color) {
   return /^#[0-9a-f]{6}$/i.test(String(color || "")) ? String(color).toLowerCase() : "#ffffff";
 }
 
@@ -1533,12 +1602,14 @@ function publicUserFields(user) {
     full_name: user.full_name,
     channel_name: user.channel_name,
     role: user.role,
+    isPremium: user.role === "admin" || Boolean(user.isPremium),
     created_at: user.created_at,
     profilePictureUrl: user.profilePictureUrl || "",
     channelPictureUrl: user.channelPictureUrl || "",
     channelBannerUrl: user.channelBannerUrl || "",
     channelDescription: user.channelDescription || "",
     channelBackgroundColor: normalizeChannelBackgroundColor(user.channelBackgroundColor),
+    channelTextColor: normalizeChannelTextColor(user.channelTextColor),
     liked_video_ids: liked,
     history_video_ids: history,
     subscribed_channels: subscriptions,
@@ -1577,6 +1648,7 @@ function decorateVideoRecord(video, extras = {}) {
     ownerChannelBannerUrl: owner.channelBannerUrl || "",
     ownerChannelDescription: owner.channelDescription || "",
     ownerChannelBackgroundColor: normalizeChannelBackgroundColor(owner.channelBackgroundColor),
+    ownerChannelTextColor: normalizeChannelTextColor(owner.channelTextColor),
   };
 }
 
@@ -1814,8 +1886,11 @@ function migrateLegacyJsonData() {
           profilePictureUrl: u.profilePictureUrl || u.profile_picture_url || "",
           channelPictureUrl: u.channelPictureUrl || u.channel_picture_url || "",
           channelBannerUrl: u.channelBannerUrl || u.channel_banner_url || "",
-          channelDescription: u.channelDescription || u.channel_description || "",
-          created_at: u.created_at || new Date().toISOString(),
+      channelDescription: u.channelDescription || u.channel_description || "",
+      channelBackgroundColor: normalizeChannelBackgroundColor(u.channelBackgroundColor || u.channel_background_color),
+      channelTextColor: normalizeChannelTextColor(u.channelTextColor || u.channel_text_color),
+      isPremium: Boolean(u.isPremium || u.is_premium),
+      created_at: u.created_at || new Date().toISOString(),
         });
         continue;
       }
@@ -1832,6 +1907,9 @@ function migrateLegacyJsonData() {
         channelPictureUrl: u.channelPictureUrl || u.channel_picture_url || "",
         channelBannerUrl: u.channelBannerUrl || u.channel_banner_url || "",
         channelDescription: u.channelDescription || u.channel_description || "",
+        channelBackgroundColor: normalizeChannelBackgroundColor(u.channelBackgroundColor || u.channel_background_color),
+        channelTextColor: normalizeChannelTextColor(u.channelTextColor || u.channel_text_color),
+        isPremium: Boolean(u.isPremium || u.is_premium),
         created_at: u.created_at || new Date().toISOString(),
       });
     }
@@ -1881,6 +1959,8 @@ function persistLegacyUsers() {
       channelBannerUrl: user.channelBannerUrl || "",
       channelDescription: user.channelDescription || "",
       channelBackgroundColor: normalizeChannelBackgroundColor(user.channelBackgroundColor),
+      channelTextColor: normalizeChannelTextColor(user.channelTextColor),
+      isPremium: Boolean(user.isPremium),
       created_at: user.created_at,
     }));
   fs.writeFileSync(LEGACY_USERS_FILE, JSON.stringify(users, null, 2));

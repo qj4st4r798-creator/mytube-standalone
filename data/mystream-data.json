@@ -13,6 +13,8 @@
       "channelBannerUrl": "/uploads/a45ca499-2baa-44db-9737-9ac519d67388.jpeg",
       "channelDescription": "Welcome to the official MyStream channel — your source for all things MyStream!\r\nWe post updates, feature announcements, developer news, and behind‑the‑scenes previews of upcoming tools and improvements.\r\n\r\nStay tuned for:\r\n\r\nMyStream Updates — new features, bug fixes, and version releases\r\n\r\nCommunity Highlights — spotlighting creators and projects built on MyStream\r\n\r\nDeveloper Insights — tips, tutorials, and technical breakdowns\r\n\r\nAnnouncements — official news and important notices\r\n\r\nSubscribe to stay connected with the MyStream team and never miss what’s next!",
       "channelBackgroundColor": "#000000",
+      "channelTextColor": "#ffffff",
+      "isPremium": false,
       "created_at": "2026-04-05T19:00:00.000Z"
     },
     {
@@ -27,7 +29,9 @@
       "channelPictureUrl": "",
       "channelBannerUrl": "",
       "channelDescription": "",
-      "channelBackgroundColor": "#ffffff",
+      "channelBackgroundColor": "#000000",
+      "channelTextColor": "#ffffff",
+      "isPremium": false,
       "created_at": "2026-09-05T00:46:57.713Z"
     },
     {
@@ -42,8 +46,44 @@
       "channelPictureUrl": "",
       "channelBannerUrl": "",
       "channelDescription": "",
-      "channelBackgroundColor": "#ffffff",
+      "channelBackgroundColor": "#000000",
+      "channelTextColor": "#ffffff",
+      "isPremium": false,
       "created_at": "2026-09-05T00:53:36.161Z"
+    },
+    {
+      "id": "user_dev_test1",
+      "email": "dev-test1@mystream.co",
+      "full_name": "Dev-Test1",
+      "channel_name": "Dev-Test1",
+      "role": "admin",
+      "password_hash": "49e37199452b6203252840cb1671645d919e8b6a7d214d66ddb7d9055b17e5db",
+      "password_salt": "a63c00e183be180ae617ab67d6aca5a6",
+      "profilePictureUrl": "",
+      "channelPictureUrl": "",
+      "channelBannerUrl": "",
+      "channelDescription": "",
+      "channelBackgroundColor": "#000000",
+      "channelTextColor": "#ffffff",
+      "isPremium": true,
+      "created_at": "2026-09-05T00:00:00.000Z"
+    },
+    {
+      "id": "user_dev_test2",
+      "email": "dev-test2@mystream.co",
+      "full_name": "Dev-Test2",
+      "channel_name": "Dev-Test2",
+      "role": "admin",
+      "password_hash": "ae66599eef08265c9d244ca50cb07d4f0045ef30617431f40f68eb76547a9833",
+      "password_salt": "dc1d3a4e002d2b45953e2076a9ec6e7f",
+      "profilePictureUrl": "",
+      "channelPictureUrl": "",
+      "channelBannerUrl": "",
+      "channelDescription": "",
+      "channelBackgroundColor": "#000000",
+      "channelTextColor": "#ffffff",
+      "isPremium": false,
+      "created_at": "2026-09-05T00:00:01.000Z"
     }
   ],
   "sessions": [

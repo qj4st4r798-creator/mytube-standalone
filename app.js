@@ -30,6 +30,7 @@ const state = {
   shortCommentDraft: "",
   liveViewerCounts: {},
   adminChannels: [],
+  adminUsers: [],
   adConfig: { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" },
   adState: { videoId: "", show: false, seconds: 0 },
 };
@@ -192,6 +193,7 @@ document.addEventListener("click", async (event) => {
     state.videos = [];
     state.shorts = [];
     state.adminChannels = [];
+    state.adminUsers = [];
     state.adConfig = { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" };
     state.adState = { videoId: "", show: false, seconds: 0 };
     state.shortCommentsByShort = {};
@@ -233,6 +235,22 @@ document.addEventListener("click", async (event) => {
     const channelName = button.dataset.channelName || "this channel";
     if (!window.confirm(`Delete ${channelName}? This removes the channel and all of its videos, shorts, and account data.`)) return;
     await deleteChannel(button.dataset.channelId);
+    return;
+  }
+
+  if (action === "toggle-premium") {
+    const granted = button.dataset.granted !== "true";
+    try {
+      await api(`/api/admin/users/${encodeURIComponent(button.dataset.userId)}/premium`, {
+        method: "POST",
+        body: { granted },
+      });
+      state.notice = granted ? "MyStream Premium granted." : "MyStream Premium revoked.";
+      await refreshAppData();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    }
     return;
   }
 
@@ -545,10 +563,12 @@ async function refreshAppData() {
     const adResponse = await api("/api/ad");
     state.adConfig = adResponse.ad || state.adConfig;
     if (state.user.role === "admin") {
-      const channelsResponse = await api("/api/admin/channels");
+      const [channelsResponse, usersResponse] = await Promise.all([api("/api/admin/channels"), api("/api/admin/users")]);
       state.adminChannels = channelsResponse.channels || [];
+      state.adminUsers = usersResponse.users || [];
     } else {
       state.adminChannels = [];
+      state.adminUsers = [];
     }
   } catch (error) {
     state.user = null;
@@ -604,6 +624,13 @@ async function login(formData) {
     const [videosResponse, shortsResponse] = await Promise.allSettled([api("/api/videos"), api("/api/shorts")]);
     state.videos = videosResponse.status === "fulfilled" ? (videosResponse.value.videos || []) : state.videos;
     state.shorts = shortsResponse.status === "fulfilled" ? (shortsResponse.value.shorts || []) : state.shorts;
+    const adResponse = await api("/api/ad");
+    state.adConfig = adResponse.ad || state.adConfig;
+    if (state.user.role === "admin") {
+      const [channelsResponse, usersResponse] = await Promise.all([api("/api/admin/channels"), api("/api/admin/users")]);
+      state.adminChannels = channelsResponse.channels || [];
+      state.adminUsers = usersResponse.users || [];
+    }
     state.notice = "Signed in successfully.";
     setRoute("/channel");
   } catch (error) {
@@ -722,7 +749,10 @@ async function updateChannelSettings(formData) {
       multipart.set("channel_banner_file", channelBannerFile);
     }
     multipart.set("channel_description", String(formData.get("channel_description") || "").trim());
-    multipart.set("channel_background_color", String(formData.get("channel_background_color") || "#ffffff").trim());
+    if (state.user.role === "admin" || state.user.isPremium) {
+      multipart.set("channel_background_color", String(formData.get("channel_background_color") || "#000000").trim());
+      multipart.set("channel_text_color", String(formData.get("channel_text_color") || "#ffffff").trim());
+    }
 
     const payload = await api("/api/me/channel", {
       method: "POST",
@@ -1627,7 +1657,7 @@ function render() {
 
 function shouldShowPreroll(video) {
   const ad = state.adConfig;
-  if (!ad?.enabled || !ad.video_url || video.is_live || !video.video_url) return false;
+  if (state.user?.role === "admin" || state.user?.isPremium || !ad?.enabled || !ad.video_url || video.is_live || !video.video_url) return false;
   const storageKey = `mystream-ad-progress-${ad.updated_at || ad.video_url}`;
   let progress = { count: 0, seen: [] };
   try {
@@ -2585,6 +2615,7 @@ function renderProfileSettingsPage() {
 }
 
 function renderEditChannelPage() {
+  const canCustomizeChannel = state.user.role === "admin" || state.user.isPremium;
   return `
     <div class="max-w-4xl mx-auto p-4 md:p-8">
       <div class="flex items-center gap-3 mb-8">
@@ -2616,13 +2647,16 @@ function renderEditChannelPage() {
           <label class="text-sm font-medium">Channel Description</label>
           <textarea class="${textareaClass()}" name="channel_description" placeholder="Tell viewers what your channel is about">${escapeHtml(state.user.channelDescription || "")}</textarea>
         </div>
-        <div>
-          <label class="text-sm font-medium">Channel Page Background</label>
-          <div class="mt-2 flex items-center gap-3">
-            <input class="h-12 w-16 cursor-pointer rounded-lg border border-border bg-background p-1" type="color" name="channel_background_color" value="${escapeAttr(state.user.channelBackgroundColor || "#ffffff")}" />
-            <span class="text-sm text-muted-foreground">Choose any color for the full channel page background.</span>
-          </div>
-        </div>
+        ${canCustomizeChannel
+          ? `<div class="grid gap-4 md:grid-cols-2">
+              <label class="text-sm font-medium">Channel Page Background
+                <span class="mt-2 flex items-center gap-3"><input class="h-12 w-16 cursor-pointer rounded-lg border border-border bg-background p-1" type="color" name="channel_background_color" value="${escapeAttr(state.user.channelBackgroundColor || "#000000")}" /><span class="text-sm text-muted-foreground">Full page background.</span></span>
+              </label>
+              <label class="text-sm font-medium">Channel Text Color
+                <span class="mt-2 flex items-center gap-3"><input class="h-12 w-16 cursor-pointer rounded-lg border border-border bg-background p-1" type="color" name="channel_text_color" value="${escapeAttr(state.user.channelTextColor || "#ffffff")}" /><span class="text-sm text-muted-foreground">Text on your channel page.</span></span>
+              </label>
+            </div>`
+          : `<div class="rounded-2xl border border-border bg-background/40 p-4 text-sm text-muted-foreground">Channel colors are a MyStream Premium feature. Ask an admin to grant Premium access.</div>`}
         ${renderMessage()}
         <div class="flex flex-wrap gap-3">
           <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
@@ -2994,11 +3028,12 @@ function renderChannelPage(channelName) {
         channelPictureUrl: owner?.ownerChannelPictureUrl || "",
         channelBannerUrl: owner?.ownerChannelBannerUrl || "",
         channelDescription: owner?.ownerChannelDescription || "",
-        channelBackgroundColor: owner?.ownerChannelBackgroundColor || "#ffffff",
+        channelBackgroundColor: owner?.ownerChannelBackgroundColor || "#000000",
+        channelTextColor: owner?.ownerChannelTextColor || "#ffffff",
       };
 
   return `
-    <div class="min-h-screen max-w-[1800px] mx-auto p-4 md:p-8" style="background-color: ${escapeAttr(channelUser.channelBackgroundColor || "#ffffff")}">
+    <div class="min-h-screen max-w-[1800px] mx-auto p-4 md:p-8" style="background-color: ${escapeAttr(channelUser.channelBackgroundColor || "#000000")}; color: ${escapeAttr(channelUser.channelTextColor || "#ffffff")} ">
       <section class="rounded-3xl border border-border bg-card overflow-hidden">
         ${renderChannelBanner(channelUser, "h-64")}
         <div class="relative px-6 pb-6">
@@ -3147,6 +3182,31 @@ function renderAdminPage() {
             ? `<div class="space-y-3">${state.shorts.map((short) => renderAdminShortRow(short)).join("")}</div>`
             : renderMiniEmpty("No shorts have been uploaded yet.")
         }
+      </section>
+
+      <section class="rounded-3xl border border-border bg-card p-6 mt-8">
+        <details>
+          <summary class="cursor-pointer list-none flex items-center justify-between gap-4">
+            <div>
+              <h2 class="text-xl font-semibold">MyStream Premium</h2>
+              <p class="text-sm text-muted-foreground mt-1">Grant Premium to remove ads and unlock channel color customization.</p>
+            </div>
+            <span class="text-sm text-muted-foreground">${state.adminUsers.length} accounts</span>
+          </summary>
+          <div class="space-y-3 mt-5">
+            ${state.adminUsers.length
+              ? state.adminUsers.map((account) => `
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-border bg-background/40 p-4">
+                  <div class="flex items-center gap-3 min-w-0">
+                    ${renderUserAvatar(account, "h-11 w-11", "text-sm")}
+                    <div class="min-w-0"><p class="font-semibold truncate">${escapeHtml(account.full_name || account.channel_name || "Unnamed user")}</p><p class="text-sm text-muted-foreground truncate">${escapeHtml(account.email || "")}${account.role === "admin" ? " • Admin" : ""}</p></div>
+                  </div>
+                  <button class="${account.isPremium ? secondaryButtonClass() : primaryButtonClass()} shrink-0" data-action="toggle-premium" data-user-id="${escapeAttr(account.id)}" data-granted="${account.isPremium ? "true" : "false"}" type="button" ${account.role === "admin" ? "disabled" : ""}>${account.role === "admin" ? "Admin Premium" : account.isPremium ? "Revoke Premium" : "Grant MyStream Premium"}</button>
+                </div>
+              `).join("")
+              : renderMiniEmpty("No accounts found.")}
+          </div>
+        </details>
       </section>
 
       <section class="rounded-3xl border border-border bg-card p-6 mt-8">
@@ -3759,7 +3819,7 @@ function installShortsStyles() {
 function initializeTheme() {
   installThemeStyles();
   const savedTheme = readTheme();
-  applyTheme(savedTheme || "light");
+  applyTheme(savedTheme || "dark");
 }
 
 function toggleTheme() {

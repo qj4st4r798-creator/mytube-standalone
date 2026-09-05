@@ -12,6 +12,8 @@
     "channelBannerUrl": "/uploads/a45ca499-2baa-44db-9737-9ac519d67388.jpeg",
     "channelDescription": "Welcome to the official MyStream channel — your source for all things MyStream!\r\nWe post updates, feature announcements, developer news, and behind‑the‑scenes previews of upcoming tools and improvements.\r\n\r\nStay tuned for:\r\n\r\nMyStream Updates — new features, bug fixes, and version releases\r\n\r\nCommunity Highlights — spotlighting creators and projects built on MyStream\r\n\r\nDeveloper Insights — tips, tutorials, and technical breakdowns\r\n\r\nAnnouncements — official news and important notices\r\n\r\nSubscribe to stay connected with the MyStream team and never miss what’s next!",
     "channelBackgroundColor": "#000000",
+    "channelTextColor": "#ffffff",
+    "isPremium": false,
     "created_at": "2026-04-05T19:00:00.000Z"
   },
   {
@@ -22,6 +24,13 @@
     "role": "admin",
     "password_hash": "331d84520fc3436454a2f718aeca5d4b55bcf163853870e72f6abfdb2ef75e9c",
     "password_salt": "ff60ed0a24230823c97e5e64c4b2f4ed",
+    "profilePictureUrl": "",
+    "channelPictureUrl": "",
+    "channelBannerUrl": "",
+    "channelDescription": "",
+    "channelBackgroundColor": "#000000",
+    "channelTextColor": "#ffffff",
+    "isPremium": false,
     "created_at": "2026-09-05T00:46:57.713Z"
   },
   {
@@ -32,6 +41,13 @@
     "role": "admin",
     "password_hash": "d3f393f5fe3b530cc11126a557f41d093ed70e6dc14b470ce7e3e428023fa7a0",
     "password_salt": "9ca54bb524cf0825e8013176d34629b1",
+    "profilePictureUrl": "",
+    "channelPictureUrl": "",
+    "channelBannerUrl": "",
+    "channelDescription": "",
+    "channelBackgroundColor": "#000000",
+    "channelTextColor": "#ffffff",
+    "isPremium": false,
     "created_at": "2026-09-05T00:53:36.161Z"
   }
 ]
