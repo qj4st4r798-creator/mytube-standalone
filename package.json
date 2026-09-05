@@ -1,8 +1,8 @@
 {
-  "name": "mytube-standalone",
+  "name": "mystream-standalone",
   "version": "1.0.0",
   "private": true,
-  "description": "Standalone MyTube website with local JSON auth, uploads, moderation, live camera broadcasting, and stock quotes.",
+  "description": "Standalone MyStream website with local JSON auth, uploads, moderation, live camera broadcasting, and stock quotes.",
   "dependencies": {
     "busboy": "^1.6.0",
     "cookie": "^0.7.2",

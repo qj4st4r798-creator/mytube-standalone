@@ -1,1 +1,24 @@
-[]
+[
+  {
+    "id": "video_01b189cf-566f-493c-bf6d-9709039995e1",
+    "title": "Welcome to MyStream",
+    "description": "The introduction for MyStream including the daughter company's and recent rebranding",
+    "thumbnail_url": "/uploads/aca9c7a7-ce50-4cb9-be4d-23d42d79d509.jpeg",
+    "video_url": "/uploads/4b1f710d-80b5-440c-bb54-a344dfc0516d.mp4",
+    "current_frame_url": "",
+    "channel_name": "MyStream",
+    "owner_id": "user_sjordan",
+    "category": "general",
+    "tags": [
+      "MyStream",
+      "New",
+      "Logos"
+    ],
+    "views": 4,
+    "duration": "1:04",
+    "is_live": false,
+    "is_music": false,
+    "is_sports": false,
+    "created_at": "2026-09-04T23:07:18.077Z"
+  }
+]

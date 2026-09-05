@@ -22,11 +22,11 @@ const SUPABASE_BUCKET = String(process.env.SUPABASE_BUCKET || "");
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(STORAGE_ROOT, "data");
-const DATA_FILE = path.join(DATA_DIR, "mytube-data.json");
+const DATA_FILE = path.join(DATA_DIR, "mystream-data.json");
 const SQLITE_EXPORT_FILE = path.join(DATA_DIR, "sqlite-json", "all-tables.json");
 const LEGACY_USERS_FILE = path.join(DATA_DIR, "users.json");
 const LEGACY_VIDEOS_FILE = path.join(DATA_DIR, "videos.json");
-const SESSION_COOKIE = "mytube_session";
+const SESSION_COOKIE = "mystream_session";
 const STOCK_SYMBOLS = ["AAPL","MSFT","NVDA","TSLA","AMZN","GOOG","META","SPY"];
 const STOCK_FALLBACKS = [
   { symbol: "AAPL", shortName: "Apple", price: 212.4, change: 1.82, changePercent: 0.86, marketState: "CACHED" },
@@ -235,6 +235,7 @@ async function handleApi(req, res, url) {
       channelPictureUrl,
       channelBannerUrl,
       channelDescription,
+      channelBackgroundColor: "#ffffff",
       created_at: new Date().toISOString(),
     });
     persistDataStore();
@@ -280,7 +281,7 @@ async function handleApi(req, res, url) {
     const channelPictureFile = files.channel_picture_file || null;
     const channelBannerFile = files.channel_banner_file || null;
     const channelDescription = String(fields.channel_description || "").trim();
-    const hasUpdate = Boolean(channelPictureFile || channelBannerFile || fields.channel_description !== undefined);
+    const hasUpdate = Boolean(channelPictureFile || channelBannerFile || fields.channel_description !== undefined || fields.channel_background_color !== undefined);
     if (!hasUpdate) {
       sendJson(res, 400, { error: "No channel updates were provided." });
       return;
@@ -295,6 +296,14 @@ async function handleApi(req, res, url) {
     }
     if (fields.channel_description !== undefined) {
       user.channelDescription = channelDescription;
+    }
+    if (fields.channel_background_color !== undefined) {
+      const color = String(fields.channel_background_color || "").trim();
+      if (!/^#[0-9a-f]{6}$/i.test(color)) {
+        sendJson(res, 400, { error: "Choose a valid six-digit background color." });
+        return;
+      }
+      user.channelBackgroundColor = color.toLowerCase();
     }
     persistDataStore();
     persistLegacyUsers();
@@ -849,7 +858,139 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/api/stocks/mytube") {
+  if (req.method === "GET" && url.pathname === "/api/admin/channels") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    const channels = db.users.map((channel) => ({
+      id: channel.id,
+      channel_name: channel.channel_name,
+      full_name: channel.full_name,
+      email: channel.email,
+      role: channel.role,
+      video_count: db.videos.filter((video) => video.owner_id === channel.id).length,
+      short_count: db.shorts.filter((short) => short.userId === channel.id).length,
+    }));
+    sendJson(res, 200, { channels });
+    return;
+  }
+
+  if (req.method === "DELETE" && parts[0] === "api" && parts[1] === "admin" && parts[2] === "channels" && parts[3]) {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    const channel = findUserById(decodeURIComponent(parts[3]));
+    if (!channel) {
+      sendJson(res, 404, { error: "Channel not found." });
+      return;
+    }
+    if (channel.id === user.id) {
+      sendJson(res, 400, { error: "You cannot delete the admin account you are using." });
+      return;
+    }
+    const deletedEmail = normalizeEmail(channel.email).toLowerCase();
+    if (!db.deleted_user_emails.includes(deletedEmail)) {
+      db.deleted_user_emails.push(deletedEmail);
+    }
+
+    const videoIds = db.videos.filter((video) => video.owner_id === channel.id).map((video) => video.id);
+    const shortIds = db.shorts.filter((short) => short.userId === channel.id).map((short) => short.id);
+    for (const video of db.videos.filter((entry) => videoIds.includes(entry.id))) {
+      removeUploadedAsset(video.thumbnail_url);
+      removeUploadedAsset(video.video_url);
+    }
+    for (const short of db.shorts.filter((entry) => shortIds.includes(entry.id))) {
+      removeUploadedAsset(short.thumbnailUrl || short.thumbnail_url);
+      removeUploadedAsset(short.videoUrl || short.video_url);
+    }
+    removeUploadedAsset(channel.profilePictureUrl);
+    removeUploadedAsset(channel.channelPictureUrl);
+    removeUploadedAsset(channel.channelBannerUrl);
+    db.users = db.users.filter((entry) => entry.id !== channel.id);
+    db.videos = db.videos.filter((entry) => !videoIds.includes(entry.id));
+    db.shorts = db.shorts.filter((entry) => !shortIds.includes(entry.id));
+    db.sessions = db.sessions.filter((entry) => entry.user_id !== channel.id);
+    db.likes = db.likes.filter((entry) => !videoIds.includes(entry.video_id) && entry.user_id !== channel.id);
+    db.history = db.history.filter((entry) => !videoIds.includes(entry.video_id) && entry.user_id !== channel.id);
+    db.reports = db.reports.filter((entry) => !videoIds.includes(entry.video_id) && entry.user_id !== channel.id);
+    db.comments = db.comments.filter((entry) => !videoIds.includes(entry.video_id) && entry.user_id !== channel.id);
+    db.live_chat_messages = db.live_chat_messages.filter((entry) => !videoIds.includes(entry.video_id) && entry.user_id !== channel.id);
+    db.signals = db.signals.filter((entry) => !videoIds.includes(entry.video_id));
+    db.short_reactions = db.short_reactions.filter((entry) => !shortIds.includes(entry.short_id) && entry.user_id !== channel.id);
+    db.short_comments = db.short_comments.filter((entry) => !shortIds.includes(entry.short_id) && entry.user_id !== channel.id);
+    db.subscriptions = db.subscriptions.filter((entry) => entry.user_id !== channel.id && entry.channel_name !== channel.channel_name);
+    persistDataStore();
+    persistLegacyUsers();
+    persistLegacyVideos();
+    sendJson(res, 200, { ok: true, channel_id: channel.id });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/ad") {
+    requireUser(req, res);
+    if (!res.writableEnded) sendJson(res, 200, { ad: db.ad_config });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/admin/ad") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    const { fields, files } = await parseMultipart(req);
+    const adFile = files.ad_file || null;
+    const frequency = Number.parseInt(fields.frequency, 10);
+    const skipAfterSeconds = Number.parseInt(fields.skip_after_seconds, 10);
+    if (!adFile) {
+      sendJson(res, 400, { error: "Please upload an MP4 ad." });
+      return;
+    }
+    if (!Number.isInteger(frequency) || frequency < 1) {
+      removeUploadedFiles({ adFile });
+      sendJson(res, 400, { error: "Ad frequency must be a whole number greater than zero." });
+      return;
+    }
+    if (!Number.isInteger(skipAfterSeconds) || skipAfterSeconds < 0 || skipAfterSeconds > 300) {
+      removeUploadedFiles({ adFile });
+      sendJson(res, 400, { error: "Skip time must be a whole number from 0 to 300 seconds." });
+      return;
+    }
+    removeUploadedAsset(db.ad_config.video_url);
+    db.ad_config = {
+      enabled: true,
+      video_url: `/uploads/${adFile.fileName}`,
+      frequency,
+      skip_after_seconds: skipAfterSeconds,
+      updated_at: new Date().toISOString(),
+    };
+    persistDataStore();
+    sendJson(res, 200, { ad: db.ad_config });
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/admin/ad") {
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (user.role !== "admin") {
+      sendJson(res, 403, { error: "Admin access required." });
+      return;
+    }
+    removeUploadedAsset(db.ad_config.video_url);
+    db.ad_config = { enabled: false, video_url: "", frequency: db.ad_config.frequency || 1, skip_after_seconds: db.ad_config.skip_after_seconds ?? 5, updated_at: new Date().toISOString() };
+    persistDataStore();
+    sendJson(res, 200, { ad: db.ad_config });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/stocks/mystream") {
     const user = requireUser(req, res);
     if (!user) return;
     if (user.role !== "admin") {
@@ -865,7 +1006,7 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: "Invalid stock values." });
       return;
     }
-    updateMyTubeStock({ price, change, changePercent, trendMode });
+    updateMyStreamStock({ price, change, changePercent, trendMode });
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -908,12 +1049,14 @@ function parseMultipart(req) {
         name === "channel_picture_file" ||
         name === "channel_banner_file";
       const isMedia = name === "video_file" || name === "video" || name === "file";
+      const isAd = name === "ad_file";
       const mediaLooksValid = isMedia && (ALLOWED_VIDEO_TYPES.has(mimeType) || [".mp4", ".webm", ".mov", ".mp3"].includes(extension));
       const imageLooksValid = isThumbnail && (ALLOWED_IMAGE_TYPES.has(mimeType) || [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(extension));
+      const adLooksValid = isAd && (mimeType === "video/mp4" || extension === ".mp4");
 
-      if ((isThumbnail && !imageLooksValid) || (isMedia && !mediaLooksValid)) {
+      if ((isThumbnail && !imageLooksValid) || (isMedia && !mediaLooksValid) || (isAd && !adLooksValid)) {
         file.resume();
-        reject(new Error(isThumbnail ? "Unsupported thumbnail format." : "Unsupported media format."));
+        reject(new Error(isAd ? "The ad must be an MP4 video." : isThumbnail ? "Unsupported thumbnail format." : "Unsupported media format."));
         return;
       }
 
@@ -1186,6 +1329,8 @@ function createEmptyDataStore() {
     comments: [],
     live_chat_messages: [],
     stocks: [],
+    ad_config: { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" },
+    deleted_user_emails: [],
   };
 }
 
@@ -1213,7 +1358,7 @@ function normalizeDataStore(raw) {
   }
   next.users = next.users.map((user) => ({
     id: user.id,
-    email: user.email,
+    email: normalizeEmail(user.email),
     full_name: user.full_name || "",
     channel_name: user.channel_name || slugFromText((user.email || "").split("@")[0]),
     role: user.role || "user",
@@ -1223,6 +1368,7 @@ function normalizeDataStore(raw) {
     channelPictureUrl: user.channelPictureUrl || user.channel_picture_url || "",
     channelBannerUrl: user.channelBannerUrl || user.channel_banner_url || "",
     channelDescription: user.channelDescription || user.channel_description || "",
+    channelBackgroundColor: normalizeChannelBackgroundColor(user.channelBackgroundColor || user.channel_background_color),
     created_at: user.created_at || new Date().toISOString(),
   }));
   next.sessions = next.sessions.map((session) => ({
@@ -1325,6 +1471,19 @@ function normalizeDataStore(raw) {
     updated_at: stock.updated_at || new Date().toISOString(),
     trend_mode: stock.trend_mode || "stable",
   }));
+  const ad = raw && raw.ad_config && typeof raw.ad_config === "object" ? raw.ad_config : {};
+  next.ad_config = {
+    enabled: Boolean(ad.enabled && ad.video_url),
+    video_url: String(ad.video_url || ""),
+    frequency: Math.max(1, Number.parseInt(ad.frequency, 10) || 1),
+    skip_after_seconds: Number.isFinite(Number(ad.skip_after_seconds))
+      ? Math.min(300, Math.max(0, Number.parseInt(ad.skip_after_seconds, 10) || 0))
+      : 5,
+    updated_at: String(ad.updated_at || ""),
+  };
+  next.deleted_user_emails = Array.isArray(raw && raw.deleted_user_emails)
+    ? raw.deleted_user_emails.map((email) => normalizeEmail(email).toLowerCase()).filter(Boolean)
+    : [];
   return next;
 }
 
@@ -1333,8 +1492,16 @@ function persistDataStore() {
 }
 
 function findUserByEmail(email) {
-  const lowered = String(email || "").trim().toLowerCase();
-  return db.users.find((user) => String(user.email || "").trim().toLowerCase() === lowered) || null;
+  const lowered = normalizeEmail(email).toLowerCase();
+  return db.users.find((user) => normalizeEmail(user.email).toLowerCase() === lowered) || null;
+}
+
+function normalizeEmail(email) {
+  return String(email || "").trim().replace(/@mytube\.co$/i, "@mystream.co");
+}
+
+function normalizeChannelBackgroundColor(color) {
+  return /^#[0-9a-f]{6}$/i.test(String(color || "")) ? String(color).toLowerCase() : "#ffffff";
 }
 
 function findUserById(userId) {
@@ -1371,6 +1538,7 @@ function publicUserFields(user) {
     channelPictureUrl: user.channelPictureUrl || "",
     channelBannerUrl: user.channelBannerUrl || "",
     channelDescription: user.channelDescription || "",
+    channelBackgroundColor: normalizeChannelBackgroundColor(user.channelBackgroundColor),
     liked_video_ids: liked,
     history_video_ids: history,
     subscribed_channels: subscriptions,
@@ -1408,6 +1576,7 @@ function decorateVideoRecord(video, extras = {}) {
     ownerChannelPictureUrl: owner.channelPictureUrl || "",
     ownerChannelBannerUrl: owner.channelBannerUrl || "",
     ownerChannelDescription: owner.channelDescription || "",
+    ownerChannelBackgroundColor: normalizeChannelBackgroundColor(owner.channelBackgroundColor),
   };
 }
 
@@ -1556,11 +1725,11 @@ function insertLiveChatMessage(videoId, userId, message) {
 
 function ensureDefaultStocks() {
   const now = new Date().toISOString();
-  const entry = db.stocks.find((stock) => stock.symbol === "mytube.co");
+  const entry = db.stocks.find((stock) => stock.symbol === "mystream.co");
   if (!entry) {
     db.stocks.push({
-      symbol: "mytube.co",
-      display_name: "mytube.co",
+      symbol: "mystream.co",
+      display_name: "mystream.co",
       price: 100,
       change: 0,
       change_percent: 0,
@@ -1574,19 +1743,19 @@ function ensureDefaultStocks() {
 function ensureAdminUsers() {
   const admins = [
     {
-      email: "sjordan4076@mytube.co",
+      email: "sjordan4076@mystream.co",
       password: "71678",
       fullName: "Sebastian Jordan",
       channel: "sjordan4076",
     },
     {
-      email: "jjordan4084@mytube.co",
+      email: "jjordan4084@mystream.co",
       password: "71650",
       fullName: "Jordan Admin",
       channel: "jjordan4084",
     },
     {
-      email: "Suckysuckyhair_dev@mytube.co",
+      email: "Suckysuckyhair_dev@mystream.co",
       password: "Dingleberry",
       fullName: "Suckysuckyhair Dev",
       channel: "suckysuckyhair-dev",
@@ -1594,6 +1763,7 @@ function ensureAdminUsers() {
   ];
 
   for (const admin of admins) {
+    if (db.deleted_user_emails.includes(normalizeEmail(admin.email).toLowerCase())) continue;
     const existing = findUserByEmail(admin.email);
     if (existing) continue;
     const userId = createId("user");
@@ -1624,6 +1794,9 @@ function migrateLegacyJsonData() {
       if (!u || !u.email || !u.id || !u.password_hash || !u.password_salt) {
         continue;
       }
+      if (db.deleted_user_emails.includes(normalizeEmail(u.email).toLowerCase())) {
+        continue;
+      }
 
       const existingByEmail = findUserByEmail(u.email);
       const existingById = findUserById(u.id);
@@ -1632,7 +1805,7 @@ function migrateLegacyJsonData() {
         const target = existingById || existingByEmail;
         Object.assign(target, {
           id: u.id,
-          email: u.email,
+          email: normalizeEmail(u.email),
           full_name: u.full_name || "",
           channel_name: u.channel_name || slugFromText(u.email.split("@")[0]),
           role: u.role || "user",
@@ -1649,7 +1822,7 @@ function migrateLegacyJsonData() {
 
       db.users.push({
         id: u.id,
-        email: u.email,
+        email: normalizeEmail(u.email),
         full_name: u.full_name || "",
         channel_name: u.channel_name || slugFromText(u.email.split("@")[0]),
         role: u.role || "user",
@@ -1707,6 +1880,7 @@ function persistLegacyUsers() {
       channelPictureUrl: user.channelPictureUrl || "",
       channelBannerUrl: user.channelBannerUrl || "",
       channelDescription: user.channelDescription || "",
+      channelBackgroundColor: normalizeChannelBackgroundColor(user.channelBackgroundColor),
       created_at: user.created_at,
     }));
   fs.writeFileSync(LEGACY_USERS_FILE, JSON.stringify(users, null, 2));
@@ -1814,13 +1988,13 @@ function ensureViewerCountInitialized(videoId) {
   }
 }
 
-function updateMyTubeStock(values) {
+function updateMyStreamStock(values) {
   const now = new Date().toISOString();
-  const stock = db.stocks.find((entry) => entry.symbol === "mytube.co");
+  const stock = db.stocks.find((entry) => entry.symbol === "mystream.co");
   if (!stock) {
     db.stocks.push({
-      symbol: "mytube.co",
-      display_name: "mytube.co",
+      symbol: "mystream.co",
+      display_name: "mystream.co",
       price: values.price,
       change: values.change,
       change_percent: values.changePercent,
@@ -1915,7 +2089,7 @@ async function fetchRealStockQuotes() {
 }
 
 async function fetchStocks() {
-  advanceMyTubeStock();
+  advanceMyStreamStock();
   let realStocks = [];
   try {
     realStocks = await fetchRealStockQuotes();
@@ -1932,7 +2106,7 @@ async function fetchStocks() {
     price: Number(row.price || 0),
     change: Number(row.change || 0),
     changePercent: Number(row.change_percent || 0),
-    marketState: row.symbol === "mytube.co" ? `MYTUBE ${formatTrendLabel(row.trend_mode)}` : "LOCAL",
+    marketState: row.symbol === "mystream.co" ? `MYSTREAM ${formatTrendLabel(row.trend_mode)}` : "LOCAL",
     updated_at: row.updated_at,
     trendMode: row.trend_mode || "stable",
   }));
@@ -1962,8 +2136,8 @@ function formatTrendLabel(mode) {
   }
 }
 
-function advanceMyTubeStock() {
-  const stock = db.stocks.find((entry) => entry.symbol === "mytube.co");
+function advanceMyStreamStock() {
+  const stock = db.stocks.find((entry) => entry.symbol === "mystream.co");
   if (!stock) return;
   const now = Date.now();
   const previous = new Date(stock.updated_at || 0).getTime();

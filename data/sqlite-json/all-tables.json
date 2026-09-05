@@ -8,8 +8,8 @@
   "signals": [],
   "stocks": [
     {
-      "symbol": "mytube.co",
-      "display_name": "mytube.co",
+      "symbol": "mystream.co",
+      "display_name": "mystream.co",
       "price": 100,
       "change": 0,
       "change_percent": 0,
@@ -20,9 +20,9 @@
   "users": [
     {
       "id": "user_sjordan",
-      "email": "sjordan4076@mytube.co",
+      "email": "sjordan4076@mystream.co",
       "full_name": "Sebastian Jordan",
-      "channel_name": "MyTube",
+      "channel_name": "MyStream",
       "role": "admin",
       "password_hash": "c12312e26cc571af0cb69df167e0012c9512730f65d5ed4520b928c922848c3e",
       "password_salt": "e27467bdc64c888b38d2b6e197b3a22b",
@@ -30,7 +30,7 @@
     },
     {
       "id": "user_jjordan_admin",
-      "email": "jjordan4084@mytube.co",
+      "email": "jjordan4084@mystream.co",
       "full_name": " Jacob Jordan",
       "channel_name": "Dev-1",
       "role": "admin",
@@ -40,7 +40,7 @@
     },
     {
       "id": "user_535e25b661c99b68",
-      "email": "newuser1775418608@mytube.co",
+      "email": "newuser1775418608@mystream.co",
       "full_name": "New User",
       "channel_name": "new-user",
       "role": "user",
@@ -50,7 +50,7 @@
     },
     {
       "id": "user_suckysuckyhair_dev",
-      "email": "Suckysuckyhair_dev@mytube.co",
+      "email": "Suckysuckyhair_dev@mystream.co",
       "full_name": "Suckysuckyhair Dev",
       "channel_name": "suckysuckyhair-dev",
       "role": "admin",
@@ -67,7 +67,7 @@
       "thumbnail_url": "/uploads/thumbnail_file-1775435018320-59df770119b2.webp",
       "video_url": "/uploads/video_file-1775435018326-771babe6a6a1.mp4",
       "current_frame_url": "",
-      "channel_name": "MyTube",
+      "channel_name": "MyStream",
       "owner_id": "user_sjordan",
       "category": "entertainment",
       "tags_json": "[\"Toestubb\",\"pain\",\"nopainnogain\"]",

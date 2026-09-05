@@ -1,6 +1,6 @@
-# MyTube Standalone
+# MyStream Standalone
 
-Standalone MyTube website with:
+Standalone MyStream website with:
 
 - JSON-backed users, videos, sessions, reports, likes, history, and subscriptions
 - Cookie-based auth with `HttpOnly` sessions
@@ -48,7 +48,7 @@ Recommended production setup:
 
 1. Run the app behind HTTPS.
 2. Mount persistent storage for `data/` and `uploads/`.
-3. Keep regular backups of `data/mytube-data.json`, `data/users.json`, `data/videos.json`, and `uploads/`.
+3. Keep regular backups of `data/mystream-data.json`, `data/users.json`, `data/videos.json`, and `uploads/`.
 4. Put the app behind a reverse proxy like Nginx or Caddy.
 5. Set a stricter upload limit if you expect large traffic spikes.
 6. Set `NODE_ENV=production` so secure cookies and HSTS are enabled.

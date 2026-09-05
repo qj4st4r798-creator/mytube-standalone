@@ -1,0 +1,164 @@
+{
+  "users": [
+    {
+      "id": "user_sjordan",
+      "email": "sjordan4076@mystream.co",
+      "full_name": "Sebastian Jordan",
+      "channel_name": "MyStream",
+      "role": "admin",
+      "password_hash": "c12312e26cc571af0cb69df167e0012c9512730f65d5ed4520b928c922848c3e",
+      "password_salt": "e27467bdc64c888b38d2b6e197b3a22b",
+      "profilePictureUrl": "/uploads/328d6595-2cde-473e-9fd1-c2e156882005.jpeg",
+      "channelPictureUrl": "/uploads/34503845-a6ff-49a9-958f-820c979d71e8.png",
+      "channelBannerUrl": "/uploads/a45ca499-2baa-44db-9737-9ac519d67388.jpeg",
+      "channelDescription": "Welcome to the official MyStream channel — your source for all things MyStream!\r\nWe post updates, feature announcements, developer news, and behind‑the‑scenes previews of upcoming tools and improvements.\r\n\r\nStay tuned for:\r\n\r\nMyStream Updates — new features, bug fixes, and version releases\r\n\r\nCommunity Highlights — spotlighting creators and projects built on MyStream\r\n\r\nDeveloper Insights — tips, tutorials, and technical breakdowns\r\n\r\nAnnouncements — official news and important notices\r\n\r\nSubscribe to stay connected with the MyStream team and never miss what’s next!",
+      "channelBackgroundColor": "#000000",
+      "created_at": "2026-04-05T19:00:00.000Z"
+    },
+    {
+      "id": "user_5e0cdf15-e05b-4a83-bb6a-5b0b0f612418",
+      "email": "bob@mystream.co",
+      "full_name": "Jacob Jordan",
+      "channel_name": "Bob productions",
+      "role": "admin",
+      "password_hash": "331d84520fc3436454a2f718aeca5d4b55bcf163853870e72f6abfdb2ef75e9c",
+      "password_salt": "ff60ed0a24230823c97e5e64c4b2f4ed",
+      "profilePictureUrl": "",
+      "channelPictureUrl": "",
+      "channelBannerUrl": "",
+      "channelDescription": "",
+      "channelBackgroundColor": "#ffffff",
+      "created_at": "2026-09-05T00:46:57.713Z"
+    },
+    {
+      "id": "user_5d62bce5-b302-477b-bda9-1e31d7ec0702",
+      "email": "0megav0id@mystream.co",
+      "full_name": "Adam Davey",
+      "channel_name": "suckysuckyhair",
+      "role": "admin",
+      "password_hash": "d3f393f5fe3b530cc11126a557f41d093ed70e6dc14b470ce7e3e428023fa7a0",
+      "password_salt": "9ca54bb524cf0825e8013176d34629b1",
+      "profilePictureUrl": "",
+      "channelPictureUrl": "",
+      "channelBannerUrl": "",
+      "channelDescription": "",
+      "channelBackgroundColor": "#ffffff",
+      "created_at": "2026-09-05T00:53:36.161Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session_79dbc0ef-7b32-4590-9f5a-6b3cef296cd2",
+      "user_id": "user_sjordan",
+      "token_hash": "f8a84592c779628c74aedf5686b90ea5679287bcb1728f68343061da58f918c5",
+      "expires_at": "2026-09-11T01:29:59.880Z",
+      "created_at": "2026-09-04T01:29:59.880Z"
+    },
+    {
+      "id": "session_f371d09f-02cc-4b33-aeb5-5e2c865165ca",
+      "user_id": "user_sjordan",
+      "token_hash": "26914130cca7bcd35fed76cde55e336cb80ff7cb8cc0f2ae8cbc04d21e0eafb8",
+      "expires_at": "2026-09-11T01:31:06.655Z",
+      "created_at": "2026-09-04T01:31:06.655Z"
+    },
+    {
+      "id": "session_7e20c57e-aa76-4196-a608-44be1f1abd7f",
+      "user_id": "user_sjordan",
+      "token_hash": "d9c1954839555f1c1bc8c8da23174dd9183554562300df2a810bf6bcbb20bf41",
+      "expires_at": "2026-09-11T01:42:04.115Z",
+      "created_at": "2026-09-04T01:42:04.115Z"
+    },
+    {
+      "id": "session_0fab4eb7-092f-4f97-bb21-91592dd4666d",
+      "user_id": "user_sjordan",
+      "token_hash": "5f6aaa3f38bdbd07dee53975f62d08ba4fde447c69ebf6c94b9477aa4746404c",
+      "expires_at": "2026-09-11T01:57:40.516Z",
+      "created_at": "2026-09-04T01:57:40.516Z"
+    },
+    {
+      "id": "session_273b3400-3a8d-42e4-9a83-e0914eff1ba4",
+      "user_id": "user_sjordan",
+      "token_hash": "82fae6e6b97490eea19334e43e6ec2acc895e80021f3d9752f3a13d23838c2f5",
+      "expires_at": "2026-09-11T02:03:06.215Z",
+      "created_at": "2026-09-04T02:03:06.215Z"
+    },
+    {
+      "id": "session_5637628c-4012-4d35-9446-3076f02922cb",
+      "user_id": "user_sjordan",
+      "token_hash": "893fd49475c767de9c6fc01f05cbc6a527c155469ed347847566eab592317980",
+      "expires_at": "2026-09-12T00:30:52.675Z",
+      "created_at": "2026-09-05T00:30:52.675Z"
+    },
+    {
+      "id": "session_57528b2c-92be-43a6-8470-fa555b8407ea",
+      "user_id": "user_sjordan",
+      "token_hash": "93ce0b5c7cab821570d0bbe6b061a12007e05512818f58520cdfe90fbc15040e",
+      "expires_at": "2026-09-12T00:32:32.634Z",
+      "created_at": "2026-09-05T00:32:32.634Z"
+    }
+  ],
+  "videos": [
+    {
+      "id": "video_01b189cf-566f-493c-bf6d-9709039995e1",
+      "title": "Welcome to MyStream",
+      "description": "The introduction for MyStream including the daughter company's and recent rebranding",
+      "thumbnail_url": "/uploads/aca9c7a7-ce50-4cb9-be4d-23d42d79d509.jpeg",
+      "video_url": "/uploads/4b1f710d-80b5-440c-bb54-a344dfc0516d.mp4",
+      "current_frame_url": "",
+      "channel_name": "MyStream",
+      "owner_id": "user_sjordan",
+      "category": "general",
+      "tags_json": "[\"MyStream\",\"New\",\"Logos\"]",
+      "views": 4,
+      "duration": "1:04",
+      "is_live": false,
+      "is_music": false,
+      "is_sports": false,
+      "created_at": "2026-09-04T23:07:18.077Z"
+    }
+  ],
+  "shorts": [],
+  "short_reactions": [],
+  "short_comments": [],
+  "likes": [
+    {
+      "user_id": "user_sjordan",
+      "video_id": "video_01b189cf-566f-493c-bf6d-9709039995e1",
+      "created_at": "2026-09-04T23:08:34.459Z"
+    }
+  ],
+  "history": [
+    {
+      "user_id": "user_sjordan",
+      "video_id": "video_01b189cf-566f-493c-bf6d-9709039995e1",
+      "viewed_at": "2026-09-05T00:21:59.733Z"
+    }
+  ],
+  "reports": [],
+  "subscriptions": [],
+  "signals": [],
+  "comments": [],
+  "live_chat_messages": [],
+  "stocks": [
+    {
+      "symbol": "mystream.co",
+      "display_name": "mystream.co",
+      "price": 60.5,
+      "change": 5.87,
+      "change_percent": 10.75,
+      "updated_at": "2026-09-04T01:33:54.361Z",
+      "trend_mode": "fast_growth"
+    }
+  ],
+  "ad_config": {
+    "enabled": true,
+    "video_url": "/uploads/e5e1e7b3-3af8-4943-b7c1-76ec7b0d353b.mp4",
+    "frequency": 100,
+    "skip_after_seconds": 15,
+    "updated_at": "2026-09-05T00:22:54.117Z"
+  },
+  "deleted_user_emails": [
+    "jjordan4084@mystream.co",
+    "suckysuckyhair_dev@mystream.co"
+  ]
+}

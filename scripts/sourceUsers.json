@@ -1,9 +1,9 @@
 [
   {
     "id": "user_sjordan",
-    "email": "sjordan4076@mytube.co",
+    "email": "sjordan4076@mystream.co",
     "full_name": "Sebastian Jordan",
-    "channel_name": "MyTube",
+    "channel_name": "MyStream",
     "role": "admin",
     "password_hash": "c12312e26cc571af0cb69df167e0012c9512730f65d5ed4520b928c922848c3e",
     "password_salt": "e27467bdc64c888b38d2b6e197b3a22b",
@@ -11,7 +11,7 @@
   },
   {
     "id": "user_jjordan_admin",
-    "email": "jjordan4084@mytube.co",
+    "email": "jjordan4084@mystream.co",
     "full_name": " Jacob Jordan",
     "channel_name": "Dev-1",
     "role": "admin",
@@ -21,7 +21,7 @@
   },
   {
     "id": "user_535e25b661c99b68",
-    "email": "newuser1775418608@mytube.co",
+    "email": "newuser1775418608@mystream.co",
     "full_name": "New User",
     "channel_name": "new-user",
     "role": "user",
@@ -31,7 +31,7 @@
   },
   {
     "id": "user_suckysuckyhair_dev",
-    "email": "Suckysuckyhair_dev@mytube.co",
+    "email": "Suckysuckyhair_dev@mystream.co",
     "full_name": "Suckysuckyhair Dev",
     "channel_name": "suckysuckyhair-dev",
     "role": "admin",
@@ -41,7 +41,7 @@
   },
   {
     "id": "user_0faab2f2-e070-4bff-971f-006ea157494c",
-    "email": "dean@mytube.co",
+    "email": "dean@mystream.co",
     "full_name": "Dean Вуфт",
     "channel_name": "dean",
     "role": "user",

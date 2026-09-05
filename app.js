@@ -8,7 +8,7 @@ const state = {
   stockHistoryBySymbol: {},
   stocksUpdatedAt: "",
   stockChartRange: "day",
-  selectedStockSymbol: "mytube.co",
+  selectedStockSymbol: "mystream.co",
   route: null,
   sidebarCollapsed: window.innerWidth < 768,
   loading: true,
@@ -29,6 +29,9 @@ const state = {
   activeShortId: "",
   shortCommentDraft: "",
   liveViewerCounts: {},
+  adminChannels: [],
+  adConfig: { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" },
+  adState: { videoId: "", show: false, seconds: 0 },
 };
 
 const runtime = {
@@ -54,6 +57,23 @@ const runtime = {
 
 const THEME_STORAGE_KEY = "theme";
 const THEME_VARS_STYLE_ID = "theme-vars";
+
+function displayBrand(date = new Date()) {
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const isSpookySeason = (month === 10 && day >= 29) || (month === 11 && day <= 1);
+  return isSpookySeason ? "SpookStream" : "MyStream";
+}
+
+document.title = `${displayBrand()} Standalone`;
+let activeDisplayBrand = displayBrand();
+window.setInterval(() => {
+  const nextBrand = displayBrand();
+  if (nextBrand === activeDisplayBrand) return;
+  activeDisplayBrand = nextBrand;
+  document.title = `${nextBrand} Standalone`;
+  render();
+}, 60 * 1000);
 
 const routeTable = [
   { name: "home", pattern: "/" },
@@ -109,11 +129,11 @@ const sidebarSections = [
   {
     title: "Explore",
     items: [
-      { label: "MyTube Music", route: "/music" },
-      { label: "MyTube Live", route: "/live" },
-      { label: "MyTube Stock", route: "/stock" },
-      { label: "MyTube Sports", route: "/sports" },
-      { label: "MyTube Shorts", route: "/shorts" },
+      { label: `${displayBrand()} Music`, route: "/music" },
+      { label: `${displayBrand()} Live`, route: "/live" },
+      { label: `${displayBrand()} Stock`, route: "/stock" },
+      { label: `${displayBrand()} Sports`, route: "/sports" },
+      { label: `${displayBrand()} Shorts`, route: "/shorts" },
     ],
   },
 ];
@@ -171,6 +191,9 @@ document.addEventListener("click", async (event) => {
     state.user = null;
     state.videos = [];
     state.shorts = [];
+    state.adminChannels = [];
+    state.adConfig = { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" };
+    state.adState = { videoId: "", show: false, seconds: 0 };
     state.shortCommentsByShort = {};
     state.activeShortId = "";
     state.shortCommentDraft = "";
@@ -203,6 +226,32 @@ document.addEventListener("click", async (event) => {
     const confirmed = window.confirm("Delete this short?");
     if (!confirmed) return;
     await deleteShort(button.dataset.shortId);
+    return;
+  }
+
+  if (action === "delete-channel") {
+    const channelName = button.dataset.channelName || "this channel";
+    if (!window.confirm(`Delete ${channelName}? This removes the channel and all of its videos, shorts, and account data.`)) return;
+    await deleteChannel(button.dataset.channelId);
+    return;
+  }
+
+  if (action === "delete-ad") {
+    if (!window.confirm("Disable and delete the current ad?")) return;
+    try {
+      await api("/api/admin/ad", { method: "DELETE" });
+      state.adConfig = { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" };
+      state.notice = "Ad disabled.";
+      render();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    }
+    return;
+  }
+
+  if (action === "skip-ad") {
+    finishAd();
     return;
   }
 
@@ -351,9 +400,15 @@ document.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (form.matches("[data-mytube-stock-form]")) {
+  if (form.matches("[data-mystream-stock-form]")) {
     event.preventDefault();
-    await updateMyTubeStock(form);
+    await updateMyStreamStock(form);
+    return;
+  }
+
+  if (form.matches("[data-ad-form]")) {
+    event.preventDefault();
+    await saveAd(new FormData(form));
     return;
   }
 });
@@ -451,7 +506,22 @@ async function api(path, options = {}) {
   });
 
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+  const contentType = response.headers.get("content-type") || "";
+  if (text) {
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        response.url.includes("/api/")
+          ? "The MyStream API is not responding. Start the Node server with `npm start` and reload the page."
+          : "MyStream is being served from an unsupported page URL. Open the app from the Node server address."
+      );
+    }
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("The MyStream API returned an invalid response. Restart the Node server and try again.");
+    }
+  }
 
   if (!response.ok) {
     throw new Error(data.error || "Request failed.");
@@ -472,10 +542,19 @@ async function refreshAppData() {
     const [videosResponse, shortsResponse] = await Promise.allSettled([api("/api/videos"), api("/api/shorts")]);
     state.videos = videosResponse.status === "fulfilled" ? (videosResponse.value.videos || []) : [];
     state.shorts = shortsResponse.status === "fulfilled" ? (shortsResponse.value.shorts || []) : [];
+    const adResponse = await api("/api/ad");
+    state.adConfig = adResponse.ad || state.adConfig;
+    if (state.user.role === "admin") {
+      const channelsResponse = await api("/api/admin/channels");
+      state.adminChannels = channelsResponse.channels || [];
+    } else {
+      state.adminChannels = [];
+    }
   } catch (error) {
     state.user = null;
     state.videos = [];
     state.shorts = [];
+    state.adConfig = { enabled: false, video_url: "", frequency: 1, skip_after_seconds: 5, updated_at: "" };
     state.error = error.message;
   } finally {
     state.loading = false;
@@ -643,6 +722,7 @@ async function updateChannelSettings(formData) {
       multipart.set("channel_banner_file", channelBannerFile);
     }
     multipart.set("channel_description", String(formData.get("channel_description") || "").trim());
+    multipart.set("channel_background_color", String(formData.get("channel_background_color") || "#ffffff").trim());
 
     const payload = await api("/api/me/channel", {
       method: "POST",
@@ -864,7 +944,7 @@ async function loadLiveChatHistory(videoId) {
   }
 }
 
-async function updateMyTubeStock(form) {
+async function updateMyStreamStock(form) {
   const formData = new FormData(form);
   const price = Number(formData.get("price"));
   const change = Number(formData.get("change"));
@@ -877,15 +957,37 @@ async function updateMyTubeStock(form) {
   }
 
   try {
-    await api("/api/stocks/mytube", {
+    await api("/api/stocks/mystream", {
       method: "POST",
       body: { price, change, changePercent, trendMode },
     });
     await refreshStocks();
-    state.notice = "MyTube stock updated.";
+    state.notice = "MyStream stock updated.";
     render();
   } catch (error) {
     state.notice = error.message;
+    render();
+  }
+}
+
+async function saveAd(formData) {
+  state.uploadLoading = true;
+  state.error = "";
+  render();
+  try {
+    const file = formData.get("ad_file");
+    if (!file || !file.size) throw new Error("Choose an MP4 ad to upload.");
+    const multipart = new FormData();
+    multipart.set("ad_file", file);
+    multipart.set("frequency", String(formData.get("frequency") || "1"));
+    multipart.set("skip_after_seconds", String(formData.get("skip_after_seconds") || "5"));
+    const payload = await api("/api/admin/ad", { method: "POST", body: multipart, formData: true });
+    state.adConfig = payload.ad || state.adConfig;
+    state.notice = "Ad saved.";
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    state.uploadLoading = false;
     render();
   }
 }
@@ -1050,6 +1152,18 @@ async function deleteShort(shortId) {
   }
 }
 
+async function deleteChannel(channelId) {
+  try {
+    await api(`/api/admin/channels/${encodeURIComponent(channelId)}`, { method: "DELETE" });
+    await refreshAppData();
+    state.notice = "Channel deleted.";
+    render();
+  } catch (error) {
+    state.notice = error.message;
+    render();
+  }
+}
+
 async function toggleSubscribe(channelName) {
   try {
     await api(`/api/channels/${encodeURIComponent(channelName)}/subscribe`, { method: "POST" });
@@ -1174,7 +1288,7 @@ async function refreshStocks() {
     state.stocksUpdatedAt = payload.updated_at || "";
     state.stockHistoryBySymbol = buildStockHistoryMap(state.stocks);
     if (!state.selectedStockSymbol || !state.stocks.some((stock) => stock.symbol === state.selectedStockSymbol)) {
-      state.selectedStockSymbol = state.stocks[0]?.symbol || "mytube.co";
+      state.selectedStockSymbol = state.stocks[0]?.symbol || "mystream.co";
     }
     if (state.route.name === "stock") {
       render();
@@ -1499,9 +1613,7 @@ function disconnectLiveAudioStream() {
 
 
 function render() {
-  if (!state.user && state.route.name !== "login" && state.route.name !== "signup") {
-    root.innerHTML = renderEducationHomepage();
-  } else if (state.user) {
+  if (state.user) {
     root.innerHTML = renderShell();
   } else {
     root.innerHTML = renderPublicPage();
@@ -1510,6 +1622,52 @@ function render() {
   syncBackgroundEffects();
   syncLiveViewer();
   syncLiveChatStream();
+  syncAdPlayback();
+}
+
+function shouldShowPreroll(video) {
+  const ad = state.adConfig;
+  if (!ad?.enabled || !ad.video_url || video.is_live || !video.video_url) return false;
+  const storageKey = `mystream-ad-progress-${ad.updated_at || ad.video_url}`;
+  let progress = { count: 0, seen: [] };
+  try {
+    progress = JSON.parse(localStorage.getItem(storageKey) || "null") || progress;
+  } catch {}
+  if (progress.seen.includes(video.id)) return false;
+  progress.seen.push(video.id);
+  progress.count = Number(progress.count || 0) + 1;
+  if (progress.seen.length > 500) progress.seen.shift();
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(progress));
+  } catch {}
+  return (progress.count - 1) % Math.max(1, Number(ad.frequency) || 1) === 0;
+}
+
+function finishAd() {
+  const adVideo = document.querySelector("[data-ad-player]");
+  if (adVideo) adVideo.pause();
+  state.adState = { ...state.adState, show: false, seconds: 0 };
+  render();
+}
+
+function syncAdPlayback() {
+  const adVideo = document.querySelector("[data-ad-player]");
+  if (!adVideo) return;
+  if (!adVideo.dataset.bound) {
+    adVideo.dataset.bound = "true";
+    adVideo.addEventListener("timeupdate", () => {
+      const seconds = Math.floor(adVideo.currentTime || 0);
+      state.adState.seconds = seconds;
+      const skipButton = document.querySelector("[data-action=skip-ad]");
+      const skipAfterSeconds = Math.max(0, Number(state.adConfig.skip_after_seconds) || 0);
+      if (skipButton && seconds >= skipAfterSeconds) {
+        skipButton.disabled = false;
+        skipButton.textContent = "Skip ad";
+      }
+    });
+    adVideo.addEventListener("ended", finishAd);
+    adVideo.play().catch(() => {});
+  }
 }
 
 function renderEducationHomepage() {
@@ -1536,7 +1694,7 @@ function renderEducationHomepage() {
               ${iconSpark("h-5 w-5")}
             </div>
             <div>
-              <p class="text-sm font-semibold tracking-[0.2em] text-blue-700 uppercase ${darkMode ? "dark:text-blue-300" : ""}">Northstar Math Academy</p>
+              <p class="text-sm font-semibold tracking-[0.2em] text-blue-700 uppercase ${darkMode ? "dark:text-blue-300" : ""}">${displayBrand()}</p>
               <p class="text-xs ${subTextClass}">Clear lessons, steady practice, stronger results</p>
             </div>
           </div>
@@ -1555,7 +1713,7 @@ function renderEducationHomepage() {
           <div class="flex items-center gap-2">
             ${renderThemeToggleButton()}
             <button class="inline-flex items-center justify-center rounded-md border ${darkMode ? "border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"} px-4 py-2.5 text-sm font-medium" data-route="/login" type="button">
-              Enter MyTube
+              Enter ${displayBrand()}
             </button>
           </div>
         </div>
@@ -1577,7 +1735,7 @@ function renderEducationHomepage() {
               </p>
               <div class="mt-8 flex flex-col gap-3 sm:flex-row">
                 <button class="inline-flex items-center justify-center rounded-md ${darkMode ? "bg-blue-500 hover:bg-blue-400" : "bg-blue-600 hover:bg-blue-700"} px-4 py-2.5 text-sm font-medium text-white" data-route="/login" type="button">
-                  Enter MyTube
+                  Enter ${displayBrand()}
                 </button>
                 <button class="inline-flex items-center justify-center rounded-md border ${darkMode ? "border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700" : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"} px-4 py-2.5 text-sm font-medium" type="button" data-action="scroll-section" data-section="lessons">
                   Explore Lessons
@@ -1719,7 +1877,7 @@ function renderEducationHomepage() {
         <footer class="flex flex-col items-start justify-between gap-4 px-1 pt-8 sm:flex-row sm:items-center">
           <p class="text-sm ${subTextClass}">Built for focused, school-safe math study.</p>
           <button class="inline-flex items-center justify-center rounded-md ${darkMode ? "bg-blue-500 hover:bg-blue-400" : "bg-blue-600 hover:bg-blue-700"} px-4 py-2.5 text-sm font-medium text-white" data-route="/login" type="button">
-            Enter MyTube
+            Enter ${displayBrand()}
           </button>
         </footer>
       </main>
@@ -1730,8 +1888,8 @@ function renderEducationHomepage() {
 function renderPublicPage() {
   if (state.route.name === "signup") {
     return renderAuthLayout({
-      title: "Create your MyTube account",
-      subtitle: "Welcome to MyTube! Let's start by creating your account.",
+      title: `Create your ${displayBrand()} account`,
+      subtitle: `Welcome to ${displayBrand()}! Let's start by creating your account.`,
       form: `
         <form data-signup-form class="space-y-4">
           <div>
@@ -1744,7 +1902,7 @@ function renderPublicPage() {
           </div>
           <div>
             <label class="text-sm font-medium">Email</label>
-            <input class="${inputClass()}" type="email" name="email" placeholder="you@mytube.co" required />
+            <input class="${inputClass()}" type="email" name="email" placeholder="you@mystream.co" required />
           </div>
           <div>
             <label class="text-sm font-medium">Password</label>
@@ -1778,13 +1936,13 @@ function renderPublicPage() {
   }
 
   return renderAuthLayout({
-    title: "Login to MyTube",
+    title: `Login to ${displayBrand()}`,
     subtitle: "Use one of your local accounts or create a new one.",
     form: `
       <form data-login-form class="space-y-4">
         <div>
           <label class="text-sm font-medium">Email</label>
-          <input class="${inputClass()}" type="email" name="email" placeholder="sjordan4076@mytube.co" required />
+          <input class="${inputClass()}" type="email" name="email" placeholder="sjordan4076@mystream.co" required />
         </div>
         <div>
           <label class="text-sm font-medium">Password</label>
@@ -1828,9 +1986,8 @@ function renderHeader() {
         ${iconMenu("h-5 w-5")}
       </button>
 
-      <button class="flex items-center gap-2 shrink-0 mr-2" data-route="/">
-        <div class="bg-primary rounded-lg p-1">${iconVideo("h-5 w-5 text-primary-foreground")}</div>
-        <span class="font-bold text-lg hidden sm:inline">MyTube</span>
+      <button class="flex items-center shrink-0 mr-2" data-route="/" aria-label="${displayBrand()} home">
+        ${renderBrandLogo("h-8 w-auto max-w-[150px]")}
       </button>
 
       <button class="hidden lg:inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-accent" data-route="/shorts" type="button">
@@ -1944,10 +2101,10 @@ function renderPage() {
     case "channel-detail":
       return renderChannelPage(state.route.params.channel);
     case "music":
-      return renderFeedPage("MyTube Music", "Music uploads from your local platform.", state.videos.filter((video) => video.is_music));
+      return renderFeedPage(`${displayBrand()} Music`, "Music uploads from your local platform.", state.videos.filter((video) => video.is_music));
     case "live":
       return renderFeedPage(
-        "MyTube Live",
+        `${displayBrand()} Live`,
         "Current and recent live streams.",
         state.videos.filter((video) => video.is_live),
         {
@@ -2067,7 +2224,7 @@ function renderStockPage() {
     <div class="max-w-[1800px] mx-auto p-4 md:p-8">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
         <div>
-          <h1 class="text-3xl font-bold">MyTube Stock</h1>
+          <h1 class="text-3xl font-bold">${displayBrand()} Stock</h1>
           <p class="text-muted-foreground mt-2">Live market quotes updating automatically from real stock data.</p>
           ${state.stocksUpdatedAt ? `<p class="text-xs text-muted-foreground mt-2">Last updated: ${escapeHtml(new Date(state.stocksUpdatedAt).toLocaleTimeString())}</p>` : ""}
         </div>
@@ -2135,7 +2292,7 @@ function renderSportsPage() {
   });
 
   return renderFeedPage(
-    "MyTube Sports",
+    `${displayBrand()} Sports`,
     "Sports uploads from your local platform.",
     sportsVideos,
     {
@@ -2151,7 +2308,7 @@ function renderShortsFeedPage() {
     <div class="max-w-[1800px] mx-auto p-4 md:p-8">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
         <div>
-          <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">MyTube Shorts</p>
+          <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">${displayBrand()} Shorts</p>
           <h1 class="text-3xl font-bold">Shorts</h1>
           <p class="text-muted-foreground mt-2">Vertical videos that autoplay as you scroll through the feed.</p>
         </div>
@@ -2181,7 +2338,7 @@ function renderShortsFeedPage() {
               </div>
             </aside>
           </div>`
-        : renderEmptyState("No Shorts yet", "Be the first to upload a vertical short video to MyTube Shorts.")}
+        : renderEmptyState("No Shorts yet", `Be the first to upload a vertical short video to ${displayBrand()} Shorts.`)}
       ${state.activeShortId ? renderShortCommentsOverlay(state.shorts.find((short) => short.id === state.activeShortId) || null) : ""}
     </div>
   `;
@@ -2190,7 +2347,7 @@ function renderShortsFeedPage() {
 function renderShortsFeedCard(short) {
   const author = short.user || {};
   const title = escapeHtml(short.title || "Untitled Short");
-  const channelName = escapeHtml(author.channel_name || "MyTube user");
+  const channelName = escapeHtml(author.channel_name || "MyStream user");
   const shortUrl = escapeAttr(short.videoUrl || "");
   const thumbUrl = escapeAttr(short.thumbnailUrl || "");
   const isLiked = short.userReaction === "like";
@@ -2358,7 +2515,7 @@ function renderShortsUploadPage() {
         <div class="p-2 bg-primary/10 rounded-xl">${iconShorts("h-6 w-6 text-primary")}</div>
         <div>
           <h1 class="text-2xl font-bold">Upload a Short</h1>
-          <p class="text-sm text-muted-foreground">Post a vertical 9:16 video to the MyTube Shorts feed.</p>
+          <p class="text-sm text-muted-foreground">Post a vertical 9:16 video to the ${displayBrand()} Shorts feed.</p>
         </div>
       </div>
 
@@ -2459,6 +2616,13 @@ function renderEditChannelPage() {
           <label class="text-sm font-medium">Channel Description</label>
           <textarea class="${textareaClass()}" name="channel_description" placeholder="Tell viewers what your channel is about">${escapeHtml(state.user.channelDescription || "")}</textarea>
         </div>
+        <div>
+          <label class="text-sm font-medium">Channel Page Background</label>
+          <div class="mt-2 flex items-center gap-3">
+            <input class="h-12 w-16 cursor-pointer rounded-lg border border-border bg-background p-1" type="color" name="channel_background_color" value="${escapeAttr(state.user.channelBackgroundColor || "#ffffff")}" />
+            <span class="text-sm text-muted-foreground">Choose any color for the full channel page background.</span>
+          </div>
+        </div>
         ${renderMessage()}
         <div class="flex flex-wrap gap-3">
           <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>
@@ -2490,12 +2654,23 @@ function renderWatchPage() {
   };
   const isSportsVideo = Boolean(video.is_sports || video.category === "sports" || (Array.isArray(video.tags) && video.tags.includes("sports")));
   const contentLabel = video.is_music
-    ? "MyTube Music"
+    ? `${displayBrand()} Music`
     : isSportsVideo
-      ? "MyTube Sports"
+      ? `${displayBrand()} Sports`
       : video.category === "stock"
-        ? "MyTube Stock"
+        ? `${displayBrand()} Stock`
         : "";
+  const adConfigKey = `${state.adConfig.updated_at || ""}:${state.adConfig.video_url || ""}:${state.adConfig.frequency || 1}:${state.adConfig.skip_after_seconds ?? 5}`;
+  if (state.adState.videoId !== video.id || state.adState.configKey !== adConfigKey) {
+    state.adState = {
+      videoId: video.id,
+      configKey: adConfigKey,
+      show: shouldShowPreroll(video),
+      seconds: 0,
+    };
+  }
+  const shouldShowAd = state.adState.show;
+  const skipAfterSeconds = Math.max(0, Number(state.adConfig.skip_after_seconds) || 0);
 
   return `
     <div class="p-4 md:p-6 max-w-[1800px] mx-auto">
@@ -2503,7 +2678,15 @@ function renderWatchPage() {
         <div>
           <div class="aspect-video rounded-3xl overflow-hidden border border-border bg-card">
   ${
-    video.is_live
+    shouldShowAd
+      ? `<div class="relative h-full w-full bg-black">
+          <video class="h-full w-full object-contain" src="${escapeAttr(state.adConfig.video_url)}" data-ad-player autoplay controls playsinline preload="auto"></video>
+          <div class="absolute left-4 top-4 rounded bg-black/70 px-3 py-1 text-xs text-white">Advertisement</div>
+          <button class="absolute bottom-4 right-4 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-100" style="color: #000000; background-color: #ffffff;" data-action="skip-ad" type="button" ${skipAfterSeconds > 0 ? "disabled" : ""}>
+            ${skipAfterSeconds > 0 ? `Skip in ${skipAfterSeconds}s` : "Skip ad"}
+          </button>
+        </div>`
+      : video.is_live
       ? (
         liveFrame
           ? `<div class="relative h-full w-full bg-black">
@@ -2676,7 +2859,7 @@ function renderUploadPage(isLive) {
         <div class="p-2 bg-primary/10 rounded-xl">${isLive ? iconLive("h-6 w-6 text-primary") : iconUpload("h-6 w-6 text-primary")}</div>
         <div>
           <h1 class="text-2xl font-bold">${isLive ? "Go Live" : "Upload Video"}</h1>
-          <p class="text-sm text-muted-foreground">${isLive ? "Create a live item that appears in MyTube Live." : "Post a new video to your local MyTube backend."}</p>
+          <p class="text-sm text-muted-foreground">${isLive ? `Create a live item that appears in ${displayBrand()} Live.` : `Post a new video to your local ${displayBrand()} backend.`}</p>
         </div>
       </div>
 
@@ -2736,7 +2919,7 @@ function renderUploadPage(isLive) {
           ${state.uploadLoading ? "Saving..." : "Upload Video"}
         </button>
         <div class="rounded-2xl border border-border bg-background/60 p-4 text-sm text-muted-foreground">
-          Accepted uploads: .mp4, .webm, .mov, and .mp3 for MyTube Music.
+          Accepted uploads: .mp4, .webm, .mov, and .mp3 for ${displayBrand()} Music.
         </div>
         <div class="rounded-2xl border border-border bg-background/60 p-4 text-sm text-muted-foreground">
           Want to stream your camera live instead?
@@ -2811,10 +2994,11 @@ function renderChannelPage(channelName) {
         channelPictureUrl: owner?.ownerChannelPictureUrl || "",
         channelBannerUrl: owner?.ownerChannelBannerUrl || "",
         channelDescription: owner?.ownerChannelDescription || "",
+        channelBackgroundColor: owner?.ownerChannelBackgroundColor || "#ffffff",
       };
 
   return `
-    <div class="max-w-[1800px] mx-auto p-4 md:p-8">
+    <div class="min-h-screen max-w-[1800px] mx-auto p-4 md:p-8" style="background-color: ${escapeAttr(channelUser.channelBackgroundColor || "#ffffff")}">
       <section class="rounded-3xl border border-border bg-card overflow-hidden">
         ${renderChannelBanner(channelUser, "h-64")}
         <div class="relative px-6 pb-6">
@@ -2849,7 +3033,7 @@ function renderAdminPage() {
     return renderEmptyState("Admin access required", "This panel is only available to admins.");
   }
 
-  const mytubeStock = state.stocks.find((stock) => (stock.symbol || "").toLowerCase() === "mytube.co");
+  const mystreamStock = state.stocks.find((stock) => (stock.symbol || "").toLowerCase() === "mystream.co");
   const reported = state.videos.filter((video) => Number(video.report_count || 0) > 0).sort((a, b) => (b.report_count || 0) - (a.report_count || 0));
 
   return `
@@ -2871,23 +3055,23 @@ function renderAdminPage() {
       <section class="rounded-3xl border border-border bg-card p-6 mb-8">
         <div class="flex items-center justify-between gap-3">
           <div>
-            <h2 class="text-xl font-semibold">MyTube Stock</h2>
-            <p class="text-sm text-muted-foreground">Adjust the MyTube stock price, movement, and auto trend behavior that shows up on the stock page.</p>
+            <h2 class="text-xl font-semibold">${displayBrand()} Stock</h2>
+            <p class="text-sm text-muted-foreground">Adjust the ${displayBrand()} stock price, movement, and auto trend behavior that shows up on the stock page.</p>
           </div>
           <span class="text-xs text-muted-foreground">Live price</span>
         </div>
-          <form data-mytube-stock-form class="mt-6 grid gap-4 md:grid-cols-5">
+          <form data-mystream-stock-form class="mt-6 grid gap-4 md:grid-cols-5">
             <label class="space-y-1 text-sm text-muted-foreground">
               Price
-              <input class="${inputClass()}" name="price" type="number" step="0.01" value="${escapeAttr(mytubeStock?.price || 0)}" />
+              <input class="${inputClass()}" name="price" type="number" step="0.01" value="${escapeAttr(mystreamStock?.price || 0)}" />
             </label>
             <label class="space-y-1 text-sm text-muted-foreground">
               Change
-              <input class="${inputClass()}" name="change" type="number" step="0.01" value="${escapeAttr(mytubeStock?.change || 0)}" />
+              <input class="${inputClass()}" name="change" type="number" step="0.01" value="${escapeAttr(mystreamStock?.change || 0)}" />
             </label>
             <label class="space-y-1 text-sm text-muted-foreground">
               Change %
-              <input class="${inputClass()}" name="change_percent" type="number" step="0.01" value="${escapeAttr(mytubeStock?.changePercent || 0)}" />
+              <input class="${inputClass()}" name="change_percent" type="number" step="0.01" value="${escapeAttr(mystreamStock?.changePercent || 0)}" />
             </label>
             <label class="space-y-1 text-sm text-muted-foreground">
               Trend
@@ -2898,11 +3082,44 @@ function renderAdminPage() {
                   ["fast_growth", "Grow Fast"],
                   ["slow_decline", "Deplete Slowly"],
                   ["plummet", "Plummet"],
-                ].map(([value, label]) => `<option value="${value}" ${(mytubeStock?.trendMode || "stable") === value ? "selected" : ""}>${label}</option>`).join("")}
+                ].map(([value, label]) => `<option value="${value}" ${(mystreamStock?.trendMode || "stable") === value ? "selected" : ""}>${label}</option>`).join("")}
               </select>
             </label>
-          <button class="${primaryButtonClass()}" type="submit">Update MyTube Stock</button>
+          <button class="${primaryButtonClass()}" type="submit">Update ${displayBrand()} Stock</button>
         </form>
+      </section>
+
+      <section class="rounded-3xl border border-border bg-card p-6 mb-8">
+        <div class="flex items-center justify-between gap-4 mb-5">
+          <div>
+            <h2 class="text-xl font-semibold">Video Advertisement</h2>
+            <p class="text-sm text-muted-foreground mt-1">Upload one MP4 pre-roll ad and choose how often it plays.</p>
+          </div>
+        </div>
+        <form data-ad-form class="space-y-4">
+          <label class="space-y-1 text-sm text-muted-foreground">
+            MP4 Ad
+            <input class="${inputClass()}" type="file" name="ad_file" accept="video/mp4,.mp4" required />
+          </label>
+          <div class="grid gap-4 md:grid-cols-2">
+            <label class="space-y-1 text-sm text-muted-foreground">
+              Play every N videos
+              <input class="${inputClass()}" type="number" name="frequency" min="1" step="1" value="${escapeAttr(state.adConfig.frequency || 1)}" required />
+            </label>
+            <label class="space-y-1 text-sm text-muted-foreground">
+              Skip after seconds
+              <input class="${inputClass()}" type="number" name="skip_after_seconds" min="0" max="300" step="1" value="${escapeAttr(state.adConfig.skip_after_seconds ?? 5)}" required />
+            </label>
+          </div>
+          <button class="${primaryButtonClass()}" type="submit" ${state.uploadLoading ? "disabled" : ""}>${state.uploadLoading ? "Saving..." : "Save Ad"}</button>
+        </form>
+        <p class="text-xs text-muted-foreground mt-3">${state.adConfig.enabled ? `Active: plays every ${state.adConfig.frequency} eligible video${state.adConfig.frequency === 1 ? "" : "s"}. Viewers can skip after ${state.adConfig.skip_after_seconds ?? 5} seconds.` : "No ad is active."}</p>
+      </section>
+
+      <section class="rounded-3xl border border-red-500/30 bg-red-500/5 p-6 mb-8">
+        <h2 class="text-xl font-semibold text-red-500">Delete Ad</h2>
+        <p class="text-sm text-muted-foreground mt-1">Permanently remove the current ad video and stop showing it to viewers.</p>
+        <button class="${secondaryButtonClass()} mt-4 text-red-500 hover:text-red-600" data-action="delete-ad" type="button" ${state.adConfig.enabled ? "" : "disabled"}>${iconTrash("h-4 w-4 mr-2")}Delete Current Ad</button>
       </section>
 
       <section class="rounded-3xl border border-border bg-card p-6">
@@ -2930,6 +3147,27 @@ function renderAdminPage() {
             ? `<div class="space-y-3">${state.shorts.map((short) => renderAdminShortRow(short)).join("")}</div>`
             : renderMiniEmpty("No shorts have been uploaded yet.")
         }
+      </section>
+
+      <section class="rounded-3xl border border-border bg-card p-6 mt-8">
+        <div class="flex items-center justify-between gap-4 mb-4">
+          <div>
+            <h2 class="text-xl font-semibold">Channels</h2>
+            <p class="text-sm text-muted-foreground mt-1">Delete a channel and all content owned by it.</p>
+          </div>
+          <span class="text-xs text-muted-foreground">${state.adminChannels.length} total</span>
+        </div>
+        ${state.adminChannels.length
+          ? `<div class="space-y-3">${state.adminChannels.map((channel) => `
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-border bg-background/40 p-4">
+                <div class="min-w-0">
+                  <p class="font-semibold truncate">${escapeHtml(channel.channel_name || "Unnamed channel")}</p>
+                  <p class="text-sm text-muted-foreground truncate">${escapeHtml(channel.full_name || channel.email || "Unknown owner")} • ${channel.video_count} videos • ${channel.short_count} shorts</p>
+                </div>
+                <button class="${secondaryButtonClass()} shrink-0 text-red-500 hover:text-red-600" data-action="delete-channel" data-channel-id="${escapeAttr(channel.id)}" data-channel-name="${escapeAttr(channel.channel_name || "this channel")}">${iconTrash("h-4 w-4 mr-2")}Delete Channel</button>
+              </div>
+            `).join("")}</div>`
+          : renderMiniEmpty("No channels found.")}
       </section>
     </div>
   `;
@@ -3108,15 +3346,15 @@ function renderAuthLayout({ title, subtitle, form }) {
                 ${iconShield("h-4 w-4 text-primary")}
                 Local Authentication
               </div>
-              <h1 class="mt-6 text-4xl font-bold text-slate-900 dark:text-white">Welcome to Northstar Math Academy!</h1>
+              <h1 class="mt-6 text-4xl font-bold text-slate-900 dark:text-white">Welcome to ${displayBrand()}!</h1>
               <p class="mt-4 text-base text-muted-foreground max-w-md">
-                Create an account or sign in to start uploading and watching videos on your own private MyTube instance. Your data is stored locally and never shared with any third parties or teachers 😏😏😏.
+                Create an account or sign in to start uploading and watching videos on your own private ${displayBrand()} instance. Your data is stored locally and never shared with any third parties or teachers 😏😏😏.
               </p>
             </div>
             <div class="space-y-4">
-              ${featureRow("Best place to watch videos in school", "Since MyTube runs entirely on your local network, you can access it even if securly blocks other popular video platforms.")}
-              ${featureRow("Upload your own videos", "Share videos with your friends or classmates by uploading them to your MyTube Channel.")}
-              ${featureRow("Manage your accounts", "Create multiple user accounts for different people using the same MyTube instance, or just to have a separate account for school and personal use.")}
+              ${featureRow("Best place to watch videos in school", `Since ${displayBrand()} runs entirely on your local network, you can access it even if securly blocks other popular video platforms.`)}
+              ${featureRow("Upload your own videos", `Share videos with your friends or classmates by uploading them to your ${displayBrand()} Channel.`)}
+              ${featureRow("Manage your accounts", `Create multiple user accounts for different people using the same ${displayBrand()} instance, or just to have a separate account for school and personal use.`)}
             </div>
           </div>
           <div class="relative p-6 md:p-10">
@@ -3125,7 +3363,9 @@ function renderAuthLayout({ title, subtitle, form }) {
             </div>
             <div class="max-w-md mx-auto">
               <div class="flex items-center gap-3 mb-8">
-                <div class="bg-primary rounded-xl p-2">${iconVideo("h-6 w-6 text-primary-foreground")}</div>
+                <div class="rounded-xl border border-border bg-background/75 px-3 py-2 shadow-sm">
+                  ${renderBrandLogo("h-10 w-auto max-w-[220px]")}
+                </div>
                 <div>
                   <h2 class="text-2xl font-bold">${escapeHtml(title)}</h2>
                   <p class="text-sm text-muted-foreground">${escapeHtml(subtitle)}</p>
@@ -3247,7 +3487,7 @@ function featureRow(title, text) {
 
 function renderStockCard(stock) {
   const positive = Number(stock.change || 0) >= 0;
-  const sourceLabel = stock.symbol === "mytube.co"
+  const sourceLabel = stock.symbol === "mystream.co"
     ? formatTrendMode(stock.trendMode || "stable")
     : (stock.marketState || "REGULAR");
   const sparkline = state.stockHistoryBySymbol[stock.symbol]?.day || [];
@@ -3650,15 +3890,15 @@ function navIcon(label) {
       return iconUpload(classes);
     case "Go Live":
       return iconLive(classes);
-    case "MyTube Music":
+    case `${displayBrand()} Music`:
       return iconMusic(classes);
-    case "MyTube Live":
+    case `${displayBrand()} Live`:
       return iconBroadcast(classes);
-    case "MyTube Stock":
+    case `${displayBrand()} Stock`:
       return iconStock(classes);
-    case "MyTube Sports":
+    case `${displayBrand()} Sports`:
       return iconSports(classes);
-    case "MyTube Shorts":
+    case `${displayBrand()} Shorts`:
       return iconShorts(classes);
     case "Admin Panel":
       return iconShield(classes);
@@ -3796,7 +4036,7 @@ function userDisplayName(user) {
 }
 
 function channelDisplayName(user) {
-  return String(user?.channel_name || user?.channelName || user?.full_name || user?.fullName || user?.email || "MyTube").trim() || "MyTube";
+  return String(user?.channel_name || user?.channelName || user?.full_name || user?.fullName || user?.email || "MyStream").trim() || "MyStream";
 }
 
 function userAvatarUrl(user) {
@@ -3852,12 +4092,16 @@ function renderChannelBanner(user, heightClass = "h-56") {
       <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.18),transparent_30%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.12),transparent_35%)]"></div>
       <div class="absolute inset-0 flex items-end justify-between px-6 py-5">
         <div>
-          <p class="text-xs uppercase tracking-[0.35em] text-white/65">MyTube Channel</p>
+          <p class="text-xs uppercase tracking-[0.35em] text-white/65">MyStream Channel</p>
           <p class="mt-2 text-lg font-semibold text-white">${escapeHtml(label)}</p>
         </div>
       </div>
     </div>
   `;
+}
+
+function renderBrandLogo(className = "h-8 w-auto") {
+  return `<img src="./mystream-logo.png" alt="${displayBrand()} logo" class="${className} object-contain" />`;
 }
 
 function svgIcon(classes, pathMarkup) {
